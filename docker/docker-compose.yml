@@ -1,0 +1,110 @@
+# ==============================================================================
+# 🏰 Bastille Blockchain - Docker Compose
+# ==============================================================================
+version: '3.8'
+
+services:
+  # ==============================================================================
+  # Bastille Blockchain Node
+  # ==============================================================================
+  bastille:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: runtime
+    image: bastille:latest
+    container_name: bastille-node
+    
+    # Network configuration
+    ports:
+      - "${BASTILLE_P2P_PORT:-8333}:8333"     # P2P Network
+      - "${BASTILLE_RPC_PORT:-8332}:8332"     # JSON-RPC API
+    
+    # Environment variables
+    environment:
+      # Environment
+      - MIX_ENV=prod
+      - BASTILLE_ENV=prod
+      
+      # Network configuration
+      - BASTILLE_P2P_PORT=8333
+      - BASTILLE_RPC_PORT=8332
+      - BASTILLE_MAX_PEERS=${BASTILLE_MAX_PEERS:-25}
+      
+      # Data configuration
+      - BASTILLE_DATA_PATH=/opt/bastille/data
+      - BASTILLE_LOG_PATH=/opt/bastille/logs
+      
+      # Mining configuration (disabled by default)
+      - BASTILLE_MINING_ENABLED=${BASTILLE_MINING_ENABLED:-false}
+      - BASTILLE_MINING_ADDRESS=${BASTILLE_MINING_ADDRESS:-}
+      
+      # Erlang optimizations
+      - ERL_AFLAGS="+K true +A 64"
+      - ELIXIR_ERL_OPTIONS="+K true +A 64"
+    
+    # Persistent volumes
+    volumes:
+      - bastille_data:/opt/bastille/data
+      - bastille_logs:/opt/bastille/logs
+      
+    # Network configuration
+    networks:
+      - bastille_network
+      
+    # Restart policy
+    restart: unless-stopped
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
+        reservations:
+          memory: 1G
+          cpus: '1.0'
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8332/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ==============================================================================
+  # Monitoring (optional)
+  # ==============================================================================
+  bastille-monitor:
+    image: nginx:alpine
+    container_name: bastille-monitor
+    ports:
+      - "${MONITOR_PORT:-8080}:80"
+    volumes:
+      - ./monitoring/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./monitoring/html:/usr/share/nginx/html:ro
+    networks:
+      - bastille_network
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+# ==============================================================================
+# Persistent volumes
+# ==============================================================================
+volumes:
+  bastille_data:
+    driver: local
+    name: bastille_blockchain_data
+  bastille_logs:
+    driver: local
+    name: bastille_blockchain_logs
+
+# ==============================================================================
+# Network
+# ==============================================================================
+networks:
+  bastille_network:
+    driver: bridge
+    name: bastille_net 

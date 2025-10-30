@@ -1,0 +1,253 @@
+# Bastille Blockchain - Cursor AI Rules
+
+## Project Context
+You are working on **Bastille**, a post-quantum blockchain written in Elixir with the following key characteristics:
+- **Post-quantum cryptography**: Dilithium2, Falcon512, SPHINCS+
+- **French Revolution theme**: 1789 block rewards, Bastille Day (July 14th) with 14 decimals
+- **Utility token model**: No max supply (like DOGE), fixed 1789 BAST block rewards
+- **Modern architecture**: 4-database storage (blocks, chain, state, index), GenServer-based
+- **Mining**: Blake3 Proof-of-Work (low memory alternative to RandomX)
+
+## Elixir Best Practices
+
+### Code Style & Idioms
+- **ALWAYS use the pipe operator** `|>` for data transformations (3+ function calls)
+- **Pattern match in function heads** instead of `case`/`cond` when possible
+- **Pattern match function parameters** for type safety and self-documenting code:
+  ```elixir
+  # ✅ Good - Clear contract, early type validation
+  def add_block(%Block{} = block, %Chain{} = chain)
+  def handle_call({:get_balance, address}, _from, %__MODULE__{} = state)
+  def process_result({:ok, data}), do: transform(data)
+  def process_result({:error, reason}), do: handle_error(reason)
+  
+  # ❌ Bad - Unclear types, manual validation needed
+  def add_block(block, chain) when is_map(block)
+  def handle_call(message, _from, state)
+  def process_result(result) do
+    case result do
+      {:ok, data} -> transform(data)
+      {:error, reason} -> handle_error(reason)
+    end
+  end
+  ```
+- **Use guards** for simple validations: `when is_binary(data) and byte_size(data) > 0`
+- **Prefer `with`** over nested `case` statements for error handling
+- **Use `Stream`** instead of `Enum` for large datasets or file operations
+- **Leverage `tap/2`** for side effects in pipelines
+- **Use `then/2`** for final transformations or return value wrapping
+
+### Function Design
+- **Single responsibility**: One function, one clear purpose
+- **Pattern match function parameters**: Always use pattern matching when you know the expected shape
+  - **Structs**: `def process_block(%Block{} = block)` not `def process_block(block)`
+  - **Maps**: `def handle_config(%{host: host, port: port})` not `def handle_config(config)`
+  - **Tuples**: `def handle_result({:ok, value})` and `def handle_result({:error, reason})`
+  - **Lists**: `def process_items([head | tail])` when structure matters
+  - **GenServer state**: `def handle_call(msg, _from, %__MODULE__{} = state)`
+- **Pattern match on struct fields**: `%Transaction{signature_type: :coinbase}` in function heads
+- **Use meaningful guard names**: `when is_valid_address(addr)` not `when byte_size(addr) == 44`
+- **Return consistent tuples**: `{:ok, result}` or `{:error, reason}`
+- **Avoid deep nesting**: Extract helper functions
+
+### GenServer Patterns
+- **Handle all message types** explicitly, avoid catch-all clauses
+- **Use structured state**: Define `defstruct` for GenServer state
+- **Pattern match messages** in function heads: `handle_call({:get, key}, _from, state)`
+- **Separate business logic** from GenServer boilerplate
+- **Use timeouts appropriately** for blockchain operations
+
+### Error Handling
+- **Use `with` for validation chains**: Multiple validations that can fail
+- **Pattern match on errors**: `{:error, :not_found}` not generic `{:error, _}`
+- **Provide meaningful error context**: `{:error, {:insufficient_balance, required: 100, available: 50}}`
+- **Log errors with context**: Include relevant data for debugging
+
+## Blockchain-Specific Guidelines
+
+### Cryptographic Operations
+- **Always validate inputs** before cryptographic operations
+- **Use pattern matching** for key types: `%{dilithium: dil_key, falcon: fal_key, sphincs: sph_key}`
+- **Handle key size validation** with constants from `Bastille.Core.Crypto`
+- **Separate key generation** from address derivation logic
+
+### Transaction Handling
+- **Validate transactions atomically**: All-or-nothing validation
+- **Use pattern matching** for transaction types: coinbase, regular, genesis
+- **Handle nonce sequences** carefully to prevent replay attacks
+- **Separate validation** from state application
+
+### Storage Patterns
+- **Use batch operations** for atomic writes across multiple databases
+- **Pattern match storage results**: `{:ok, data}` vs `{:error, reason}`
+- **Handle partitioned data** (time-based block storage) explicitly
+- **Index frequently queried data** (block hashes, transaction hashes)
+
+### Mining & Consensus
+- **Handle mining results asynchronously**: Use GenServer messages
+- **Validate blocks completely** before adding to chain
+- **Separate mining logic** from validation logic
+- **Handle consensus state transitions** explicitly
+
+## Architecture Patterns
+
+### Module Organization
+```
+lib/bastille/
+├── core/           # Pure functions, data structures
+├── economics/      # Tokenomics, constants, burn tracking
+├── storage/        # Database interfaces (4-database architecture)
+├── consensus/      # Mining, validation, difficulty adjustment
+├── blockchain/     # Chain state management
+├── mempool/        # Transaction pool
+├── p2p/           # Network communication
+├── rpc/           # JSON-RPC API endpoints
+└── validator/     # Block production, mining coordination
+```
+
+### Dependency Direction
+- **Core modules**: No dependencies on other Bastille modules
+- **Economics**: Only depends on core
+- **Storage**: Only depends on core
+- **Higher-level modules**: Can depend on core, economics, storage
+
+## Code Quality Standards
+
+### Comments & Documentation
+- **Language**: ALL comments must be in English
+- **Document public APIs** with `@doc` and examples
+- **Explain complex algorithms**: Mining, cryptographic operations, consensus
+- **Avoid obvious comments**: Don't state what code clearly shows
+- **No redundant descriptions**: Avoid comments like "elegant pipeline", "nice function"
+- **Use module docs** `@moduledoc` for architectural decisions
+- **Document security considerations** for crypto and consensus code
+- **Function purpose over implementation**: Explain "why" not "what"
+- **Keep comments concise**: One line when possible, focus on business logic
+
+### Logging Standards
+- **Use emoji icons** for visual clarity: 🎯, ✅, ❌, 🔄, 🚀, 🔍, 📦, etc.
+- **Consistent log levels**:
+  - `Logger.info` for important state changes, block events
+  - `Logger.debug` for detailed tracing, storage operations
+  - `Logger.error` for failures, validation errors
+  - `Logger.warning` for recoverable issues
+- **Structured format**: `"🎯 Action: Context └─ Detail: value"`
+- **Include relevant data**: Block heights, transaction hashes (truncated)
+- **Use consistent emoji per component**:
+  - 🎯 Genesis/Mining: Block creation, mining results
+  - 📦 Storage: Database operations, partitions
+  - 🔗 Chain: Blockchain state changes
+  - 💰 Balance: Account operations
+  - 🔥 Economics: Burns, rewards, fees
+  - 🌐 P2P: Network operations
+  - 🔍 Validation: Block/transaction validation
+
+### Console Output & Test Display
+- **Test descriptions with emoji**: `test "🔄 mining restarts after failure"`
+- **Progress indicators**: Use emoji for test categories
+  - 🧪 Unit tests
+  - 🔗 Integration tests
+  - 🏭 Production workflow tests
+  - 🔐 Security tests
+  - 📊 Performance tests
+- **Clear test groupings**: Use `describe` blocks with descriptive names
+- **Console output format**: 
+  - Success: `"✅ Operation completed"`
+  - Progress: `"🔄 Processing..."`
+  - Results: `"📊 Result: #{value}"`
+  - Warnings: `"⚠️ Warning: #{message}"`
+
+### Testing
+- **Unit test pure functions** comprehensively
+- **Integration test GenServer interactions** with dedicated processes
+- **Use property-based testing** for cryptographic functions
+- **Test error conditions** explicitly
+- **Mock external dependencies** (file system, network)
+
+### Performance
+- **Use lazy evaluation** with `Stream` for large datasets
+- **Avoid unnecessary data copying**: Use binaries efficiently
+- **Profile memory usage** for cryptographic operations
+- **Consider binary pattern matching** for protocol parsing
+
+## Blockchain-Specific Security
+
+### Input Validation
+- **Validate all external inputs**: RPC parameters, network messages
+- **Check ranges**: Block heights, amounts, fees
+- **Validate addresses**: Format and checksum
+- **Sanitize user data**: Especially in RPC endpoints
+
+### Cryptographic Security
+- **Never log private keys** or sensitive data
+- **Use secure random** for key generation
+- **Validate signatures** before state changes
+- **Handle key size constants** centrally
+
+### Consensus Security
+- **Validate block chains** completely
+- **Check difficulty requirements** strictly
+- **Prevent double-spending** through nonce validation
+- **Handle fork resolution** deterministically
+
+## Anti-Patterns to Avoid
+
+### General Elixir
+- **Don't use `case` in pipelines**: Extract to separate function
+- **Avoid deep nesting**: Use `with` or helper functions
+- **Don't catch-all pattern match**: Handle specific cases
+- **Avoid mutable state**: Use GenServer or functional updates
+- **No French comments**: All documentation must be in English
+- **No redundant comments**: Avoid stating what code obviously does
+- **Don't ignore function parameter types**: Use pattern matching instead of manual validation
+  - ❌ `def process(data) when is_map(data)` → ✅ `def process(%{} = data)`
+  - ❌ `def handle(block) do; if Map.has_key?(block, :header)` → ✅ `def handle(%Block{} = block)`
+  - ❌ `def parse({code, message}) do; case code` → ✅ `def parse({:ok, message})` + `def parse({:error, reason})`
+
+### Blockchain-Specific
+- **Don't mix validation with state changes**: Validate first, apply after
+- **Avoid partial updates**: Use transactions for atomicity
+- **Don't ignore cryptographic failures**: Always handle crypto errors
+- **Avoid blocking operations** in GenServer callbacks
+
+## Code Review Checklist
+
+### Before Committing
+- [ ] All functions have appropriate specs and docs (in English)
+- [ ] Pattern matching used instead of conditionals where possible
+- [ ] **Function parameters use pattern matching for known types** (structs, maps, tuples)
+- [ ] Error handling is explicit and meaningful
+- [ ] Tests cover both happy path and error cases
+- [ ] No hardcoded values (use constants or config)
+- [ ] Cryptographic operations are properly validated
+- [ ] GenServer state is properly structured
+- [ ] Pipeline operations are readable and efficient
+- [ ] Comments are in English and add value (no obvious statements)
+- [ ] Logs use appropriate emoji and structured format
+- [ ] Test descriptions are clear with emoji indicators
+
+### Blockchain-Specific Checks
+- [ ] Transaction validation is complete and atomic
+- [ ] Block validation includes all consensus rules
+- [ ] Storage operations are atomic where required
+- [ ] Mining operations don't block the chain
+- [ ] All addresses are validated before use
+- [ ] Cryptographic keys are handled securely
+
+## Token Economics Context
+
+Remember that Bastille uses:
+- **14 decimals** (Bastille Day theme)
+- **Fixed 1789 BAST rewards** per block
+- **No maximum supply** (utility token model)
+- **French addresses**: `1789...` for production, `f789...` for test
+- **Burn mechanism**: Transaction fees reduce circulating supply
+- **Genesis supply**: 1789 BAST initial distribution (1 block reward worth)
+
+## Performance Considerations
+
+- **Use binary pattern matching** for protocol parsing
+- **Leverage BEAM concurrency**: Separate concerns into processes
+- **Monitor memory usage**: Especially for cryptographic operations
+- **Consider database partitioning**: Time-based for blocks
+- **Profile critical paths**: Mining, validation, storage operations 
