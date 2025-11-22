@@ -57,7 +57,8 @@ defmodule Bastille.MixProject do
     # Post-quantum cryptography avec Rustler - MODERNE ET FIABLE !
     [
       {:rustler, "~> 0.34"},        # Rustler pour NIFs Rust
-      {:keccakf1600, "~> 3.0.0"}    # Keccak hash
+      # Upstream version does not compile on OTP 27
+      {:keccakf1600, git: "https://github.com/vitaliel/erlang-keccakf1600", branch: "fix/compile" } # Keccak hash
     ]
   end
 
