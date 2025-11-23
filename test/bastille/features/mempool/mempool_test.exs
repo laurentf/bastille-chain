@@ -1,38 +1,17 @@
 defmodule Bastille.Features.Transaction.MempoolTest do
-  use ExUnit.Case, async: false  # Mempool is a singleton GenServer
+  # Mempool is a singleton GenServer
+  use ExUnit.Case, async: false
   alias Bastille.Features.Transaction.Mempool
   alias Bastille.Features.Transaction.Transaction
   alias Bastille.Features.Tokenomics.Token
 
   @moduletag :unit
 
-  setup do
-    # Stop any existing mempool and start fresh with test configuration
-    case Process.whereis(Mempool) do
-      nil -> :ok  # Not running
-      _pid ->
-        try do
-          GenServer.stop(Mempool)
-        catch
-          :exit, _ -> :ok  # Process already dead
-        end
-    end
+  setup context do
+    stop_mempool()
+    start_test_mempool(context)
 
-    start_test_mempool()
-
-    on_exit(fn ->
-      # Safe cleanup: only stop if process is alive
-      case Process.whereis(Mempool) do
-        nil -> :ok  # Already stopped
-        _pid ->
-          try do
-            GenServer.stop(Mempool)
-          catch
-            :exit, _ -> :ok  # Process already dead, that's fine
-          end
-      end
-    end)
-
+    on_exit(&stop_mempool/0)
     :ok
   end
 
@@ -56,11 +35,12 @@ defmodule Bastille.Features.Transaction.MempoolTest do
 
   describe "simple transaction addition" do
     test "can add a valid transaction" do
-      tx = create_test_transaction([
-        from: "f789" <> String.duplicate("1", 40),
-        to: "f789" <> String.duplicate("2", 40),
-        nonce: 100
-      ])
+      tx =
+        create_test_transaction(
+          from: "f789" <> String.duplicate("1", 40),
+          to: "f789" <> String.duplicate("2", 40),
+          nonce: 100
+        )
 
       result = Mempool.add_transaction(tx)
       assert result == :ok
@@ -68,11 +48,12 @@ defmodule Bastille.Features.Transaction.MempoolTest do
     end
 
     test "can retrieve added transaction" do
-      tx = create_test_transaction([
-        from: "f789" <> String.duplicate("3", 40),
-        to: "f789" <> String.duplicate("4", 40),
-        nonce: 200
-      ])
+      tx =
+        create_test_transaction(
+          from: "f789" <> String.duplicate("3", 40),
+          to: "f789" <> String.duplicate("4", 40),
+          nonce: 200
+        )
 
       assert Mempool.add_transaction(tx) == :ok
 
@@ -83,16 +64,19 @@ defmodule Bastille.Features.Transaction.MempoolTest do
     end
 
     test "can add multiple transactions" do
-      tx1 = create_test_transaction([
-        from: "f789" <> String.duplicate("5", 40),
-        to: "f789" <> String.duplicate("6", 40),
-        nonce: 300
-      ])
-      tx2 = create_test_transaction([
-        from: "f789" <> String.duplicate("7", 40),
-        to: "f789" <> String.duplicate("8", 40),
-        nonce: 400
-      ])
+      tx1 =
+        create_test_transaction(
+          from: "f789" <> String.duplicate("5", 40),
+          to: "f789" <> String.duplicate("6", 40),
+          nonce: 300
+        )
+
+      tx2 =
+        create_test_transaction(
+          from: "f789" <> String.duplicate("7", 40),
+          to: "f789" <> String.duplicate("8", 40),
+          nonce: 400
+        )
 
       assert Mempool.add_transaction(tx1) == :ok
       assert Mempool.add_transaction(tx2) == :ok
@@ -101,30 +85,30 @@ defmodule Bastille.Features.Transaction.MempoolTest do
   end
 
   describe "mempool transaction validation" do
+    # Create mempool with higher minimum fee
+    @tag min_fee: 5_000_000
     test "rejects transactions with insufficient fee" do
-      # Create mempool with higher minimum fee
-      assert GenServer.stop(Mempool) == :ok
-      {:ok, _pid} = Mempool.start_link(min_fee: 5000000, skip_signature_validation: true, skip_chain_validation: true)
-
-      tx = create_test_transaction([
-        from: "f789" <> String.duplicate("d", 40),
-        to: "f789" <> String.duplicate("f", 40),
-        nonce: 500
-      ])
+      tx =
+        create_test_transaction(
+          from: "f789" <> String.duplicate("d", 40),
+          to: "f789" <> String.duplicate("f", 40),
+          nonce: 500
+        )
 
       # Transaction fee should be less than 5000000
-      assert tx.fee < 5000000
+      assert tx.fee < 5_000_000
       result = Mempool.add_transaction(tx)
       assert match?({:error, :insufficient_fee}, result)
       assert Mempool.size() == 0
     end
 
     test "accepts transactions with sufficient fee" do
-      tx = create_test_transaction([
-        from: "f789" <> String.duplicate("1", 40),
-        to: "f789" <> String.duplicate("2", 40),
-        nonce: 600
-      ])
+      tx =
+        create_test_transaction(
+          from: "f789" <> String.duplicate("1", 40),
+          to: "f789" <> String.duplicate("2", 40),
+          nonce: 600
+        )
 
       # Default mempool has min_fee: 1000, our transaction should have higher fee
       assert tx.fee >= 1000
@@ -133,11 +117,12 @@ defmodule Bastille.Features.Transaction.MempoolTest do
     end
 
     test "rejects duplicate transactions" do
-      tx = create_test_transaction([
-        from: "f789" <> String.duplicate("a", 40),
-        to: "f789" <> String.duplicate("b", 40),
-        nonce: 700
-      ])
+      tx =
+        create_test_transaction(
+          from: "f789" <> String.duplicate("a", 40),
+          to: "f789" <> String.duplicate("b", 40),
+          nonce: 700
+        )
 
       assert Mempool.add_transaction(tx) == :ok
       assert Mempool.size() == 1
@@ -150,14 +135,28 @@ defmodule Bastille.Features.Transaction.MempoolTest do
   end
 
   describe "mempool capacity and limits" do
+    @tag max_size: 2
     test "respects maximum mempool size" do
-      # Create mempool with small max size
-      GenServer.stop(Mempool)
-      {:ok, _pid} = Mempool.start_link(max_size: 2, skip_signature_validation: true, skip_chain_validation: true)
+      tx1 =
+        create_test_transaction(
+          from: "f789" <> String.duplicate("1", 40),
+          to: "f789" <> String.duplicate("2", 40),
+          nonce: 1
+        )
 
-      tx1 = create_test_transaction([from: "f789" <> String.duplicate("1", 40), to: "f789" <> String.duplicate("2", 40), nonce: 1])
-      tx2 = create_test_transaction([from: "f789" <> String.duplicate("3", 40), to: "f789" <> String.duplicate("4", 40), nonce: 2])
-      tx3 = create_test_transaction([from: "f789" <> String.duplicate("5", 40), to: "f789" <> String.duplicate("6", 40), nonce: 3])
+      tx2 =
+        create_test_transaction(
+          from: "f789" <> String.duplicate("3", 40),
+          to: "f789" <> String.duplicate("4", 40),
+          nonce: 2
+        )
+
+      tx3 =
+        create_test_transaction(
+          from: "f789" <> String.duplicate("5", 40),
+          to: "f789" <> String.duplicate("6", 40),
+          nonce: 3
+        )
 
       assert Mempool.add_transaction(tx1) == :ok
       assert Mempool.add_transaction(tx2) == :ok
@@ -172,21 +171,25 @@ defmodule Bastille.Features.Transaction.MempoolTest do
     test "can retrieve limited number of transactions" do
       # Add multiple transactions with proper hex addresses
       hex_pairs = [{"a", "b"}, {"c", "d"}, {"e", "f"}, {"a", "e"}, {"b", "f"}]
-      txs = for {{from_hex, to_hex}, i} <- Enum.with_index(hex_pairs, 1) do
-        from_addr = "f789" <> String.duplicate(from_hex, 40)
-        to_addr = "f789" <> String.duplicate(to_hex, 40)
-        create_test_transaction([
-          from: from_addr,
-          to: to_addr,
-          nonce: 800 + i
-        ])
-      end
+
+      txs =
+        for {{from_hex, to_hex}, i} <- Enum.with_index(hex_pairs, 1) do
+          from_addr = "f789" <> String.duplicate(from_hex, 40)
+          to_addr = "f789" <> String.duplicate(to_hex, 40)
+
+          create_test_transaction(
+            from: from_addr,
+            to: to_addr,
+            nonce: 800 + i
+          )
+        end
 
       results = Enum.map(txs, &Mempool.add_transaction/1)
 
       Enum.each(results, fn result ->
         assert result == :ok
       end)
+
       assert Mempool.size() == 5
 
       # Get limited results
@@ -201,9 +204,26 @@ defmodule Bastille.Features.Transaction.MempoolTest do
 
   describe "mempool transaction removal" do
     test "can remove specific transactions" do
-      tx1 = create_test_transaction([from: "f789" <> String.duplicate("a", 40), to: "f789" <> String.duplicate("b", 40), nonce: 901])
-      tx2 = create_test_transaction([from: "f789" <> String.duplicate("c", 40), to: "f789" <> String.duplicate("d", 40), nonce: 902])
-      tx3 = create_test_transaction([from: "f789" <> String.duplicate("e", 40), to: "f789" <> String.duplicate("f", 40), nonce: 903])
+      tx1 =
+        create_test_transaction(
+          from: "f789" <> String.duplicate("a", 40),
+          to: "f789" <> String.duplicate("b", 40),
+          nonce: 901
+        )
+
+      tx2 =
+        create_test_transaction(
+          from: "f789" <> String.duplicate("c", 40),
+          to: "f789" <> String.duplicate("d", 40),
+          nonce: 902
+        )
+
+      tx3 =
+        create_test_transaction(
+          from: "f789" <> String.duplicate("e", 40),
+          to: "f789" <> String.duplicate("f", 40),
+          nonce: 903
+        )
 
       Mempool.add_transaction(tx1)
       Mempool.add_transaction(tx2)
@@ -224,19 +244,23 @@ defmodule Bastille.Features.Transaction.MempoolTest do
 
     test "can remove multiple transactions at once" do
       hex_chars = ["a", "b", "c", "d"]
-      txs = for {hex_char, i} <- Enum.with_index(hex_chars, 1) do
-        to_char = case hex_char do
-          "a" -> "e"
-          "b" -> "f"
-          "c" -> "e"
-          "d" -> "f"
+
+      txs =
+        for {hex_char, i} <- Enum.with_index(hex_chars, 1) do
+          to_char =
+            case hex_char do
+              "a" -> "e"
+              "b" -> "f"
+              "c" -> "e"
+              "d" -> "f"
+            end
+
+          create_test_transaction(
+            from: "f789" <> String.duplicate(hex_char, 40),
+            to: "f789" <> String.duplicate(to_char, 40),
+            nonce: 950 + i
+          )
         end
-        create_test_transaction([
-          from: "f789" <> String.duplicate(hex_char, 40),
-          to: "f789" <> String.duplicate(to_char, 40),
-          nonce: 950 + i
-        ])
-      end
 
       results = Enum.map(txs, &Mempool.add_transaction/1)
       Enum.each(results, fn result -> assert result == :ok end)
@@ -260,8 +284,10 @@ defmodule Bastille.Features.Transaction.MempoolTest do
   # Helper function - start with minimal valid transaction using proper hex addresses
   defp create_test_transaction(opts) do
     defaults = [
-      from: "f789" <> String.duplicate("a", 40),  # f789 + 40 hex chars
-      to: "f789" <> String.duplicate("b", 40),    # f789 + 40 hex chars
+      # f789 + 40 hex chars
+      from: "f789" <> String.duplicate("a", 40),
+      # f789 + 40 hex chars
+      to: "f789" <> String.duplicate("b", 40),
       amount: Token.bast_to_juillet(1.0),
       nonce: 1
     ]
@@ -270,18 +296,55 @@ defmodule Bastille.Features.Transaction.MempoolTest do
     Transaction.new(attrs)
   end
 
-  defp start_test_mempool() do
+  defp start_test_mempool(context) do
+    default_opts = [
+      skip_signature_validation: true,
+      skip_chain_validation: true
+    ]
+
+    default_opts =
+      default_opts ++
+        if max_size = context[:max_size] do
+          Keyword.put(default_opts, :max_size, max_size)
+        else
+          []
+        end
+
+    default_opts =
+      default_opts ++
+        if min_fee = context[:min_fee] do
+          Keyword.put(default_opts, :min_fee, min_fee)
+        else
+          []
+        end
+
+    try_start_mempool(default_opts)
+  end
+
+  defp try_start_mempool(default_opts) do
     # Small delay to ensure cleanup
     Process.sleep(10)
 
-    case Mempool.start_link(skip_signature_validation: true, skip_chain_validation: true) do
+    case Mempool.start_link(default_opts) do
       {:ok, _pid} -> :ok
-      {:error, {:already_started, pid}} -> kill_and_start(pid)
+      {:error, {:already_started, pid}} -> try_start_mempool(default_opts, pid)
     end
   end
 
-  defp kill_and_start(pid) do
+  defp try_start_mempool(default_opts, pid) do
     Process.exit(pid, :kill)
-    start_test_mempool()
+    try_start_mempool(default_opts)
+  end
+
+  # Stop any existing mempool
+  defp stop_mempool() do
+    if Process.whereis(Mempool) do
+      try do
+        GenServer.stop(Mempool)
+      catch
+        # Process already dead
+        :exit, _ -> :ok
+      end
+    end
   end
 end
