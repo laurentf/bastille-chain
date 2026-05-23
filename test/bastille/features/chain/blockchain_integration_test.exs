@@ -134,7 +134,7 @@ defmodule Bastille.Features.Chain.BlockchainIntegrationTest do
       balances = try do
         Chain.get_all_balances()
       catch
-        :exit, _ -> %{"1789Revolution" => 178_900_000_000_000_000}
+        :exit, _ -> %{Bastille.Shared.Address.zero() => 178_900_000_000_000_000}
       end
       
       {genesis_addr, genesis_balance} = Enum.find(balances, fn {_, balance} -> balance > 0 end)

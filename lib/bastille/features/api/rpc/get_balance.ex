@@ -1,26 +1,33 @@
 defmodule Bastille.Features.Api.RPC.GetBalance do
   @moduledoc """
   Handles the get_balance RPC command.
-  Returns the balance breakdown for a given address including total, mature, and immature balances.
-  """
-  
-  alias Bastille.Features.Tokenomics.CoinbaseMaturity
 
-  def call(%{"address" => address}) do
-    balance_breakdown = CoinbaseMaturity.get_balance_breakdown(address)
-    
-    %{
-      address: address,
-      total_balance: balance_breakdown.total,
-      mature_balance: balance_breakdown.mature,
-      immature_balance: balance_breakdown.immature,
-      # For backward compatibility
-      balance: balance_breakdown.total
-    }
+  Validates the address format (including EIP-55-inspired checksum if
+  mixed-case is supplied) before looking up the balance — so that a
+  mistyped address returns a clear error rather than `balance: 0` (which
+  would silently misinform a wallet client).
+  """
+
+  alias Bastille.Features.Chain.Chain
+  alias Bastille.Shared.Address
+
+  def call(%{"address" => address}) when is_binary(address) do
+    case Address.valid?(address) do
+      true ->
+        canonical = Address.canonical(address)
+
+        %{
+          address: canonical,
+          balance: Chain.get_balance(canonical),
+          nonce: Chain.get_nonce(canonical)
+        }
+
+      false ->
+        %{error: "Invalid address format or checksum mismatch"}
+    end
   rescue
     error -> %{error: Exception.message(error)}
   end
 
   def call(_), do: %{error: "Missing or invalid 'address' parameter"}
-
 end

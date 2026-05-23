@@ -21,7 +21,6 @@ defmodule Bastille.Application do
   alias Bastille.Infrastructure.Storage.CubDB.{Blocks, State, Index}
   alias Bastille.Infrastructure.Storage.CubDB.Chain, as: ChainStorage
   alias Bastille.Features.Consensus.Engine
-  alias Bastille.Features.Tokenomics.CoinbaseMaturity
 
   @impl true
   def start(_type, _args) do
@@ -41,6 +40,9 @@ defmodule Bastille.Application do
     # Extract P2P configuration
     p2p_node_config = build_p2p_config()
 
+    # Extract mempool configuration (skip flags only meaningful in tests)
+    mempool_opts = Application.get_env(:bastille, :mempool_opts, [])
+
     children = [
       RPC,                           # JSON-RPC interface for Bastille
       # 🏰 Revolutionary Supervision Tree (Feature-Oriented Architecture)
@@ -50,9 +52,8 @@ defmodule Bastille.Application do
       {State, []},                   # Account balances/nonces (state.cubdb)
       {Index, []},                   # Fast lookups/indexes (index.cubdb)
 
-      {CoinbaseMaturity, []},        # Bitcoin-style coinbase maturity system
       {Chain, []},                   # Revolutionary blockchain state
-      {Mempool, []},                 # Post-quantum transaction pool
+      {Mempool, mempool_opts},       # Post-quantum transaction pool
       {OrphanManager, []},           # Orphan block manager (Bitcoin-style)
       {Engine, consensus_config},    # Democratic consensus with proper config
       {MiningCoordinator, validator_config}, # Blake3 mining & validation with config
@@ -61,7 +62,18 @@ defmodule Bastille.Application do
     ]
     |> Enum.filter(&valid_child?/1)
 
-    opts = [strategy: :one_for_one, name: Bastille.Supervisor]
+    # Default restart intensity is `max_restarts: 3, max_seconds: 5` which is
+    # too brittle for a top-level blockchain supervisor: a routine cycle of a
+    # single child (e.g. a test resetting a GenServer) can run the supervisor
+    # out of restart budget and kill the entire tree. Raise the budget so
+    # transient child churn never takes the whole node down.
+    opts = [
+      strategy: :one_for_one,
+      name: Bastille.Supervisor,
+      max_restarts: 100,
+      max_seconds: 10
+    ]
+
     Supervisor.start_link(children, opts)
   end
 

@@ -8,9 +8,6 @@ config :bastille,
   # Test address prefix (hex-valid, same length as production)
   address_prefix: "f789",
 
-  # Coinbase maturity configuration
-  coinbase_maturity_blocks: 5,  # 5 blocks for test environment
-
   # RPC API Configuration for tests
   rpc_port: 8332,  # Standard test RPC port
 
@@ -46,6 +43,13 @@ config :bastille,
     max_size: 100,   # Smaller for tests
     min_fee: 1
   ],
+
+  # Mempool runtime options applied by the supervisor. In tests we skip
+  # signature and chain validation so unit tests can add hand-crafted
+  # transactions without going through full post-quantum signing. A test
+  # that wants real validation can still call Mempool.start_link with
+  # explicit opts after stopping the supervised instance.
+  mempool_opts: [skip_signature_validation: true, skip_chain_validation: true],
 
   # Validator configuration - uses mining config above
   validator: [],

@@ -6,9 +6,6 @@ config :bastille,
   # Address prefix for multi-node testing
   address_prefix: "f789",
 
-  # Coinbase maturity configuration for multinode testing
-  coinbase_maturity_blocks: 5,  # 5 blocks (same as test - multinode is just better testing)
-
   # RPC Configuration - unique port per node
   rpc_port: 8101,
   # Storage with node prefix

@@ -22,7 +22,7 @@ defmodule Bastille.Features.Api.RPC.ExtractKeysForSigningTest do
       case result do
         %{"error" => %{"code" => -32_602, "message" => message}} ->
           assert is_binary(message)
-        %{"result" => _} ->
+        %{"address" => _} ->
           # Empty string might succeed with some implementations
           assert true
       end
@@ -38,7 +38,7 @@ defmodule Bastille.Features.Api.RPC.ExtractKeysForSigningTest do
         case result do
           %{"error" => %{"code" => -32_602, "message" => message}} ->
             assert is_binary(message)
-          %{"result" => _} ->
+          %{"address" => _} ->
             # Some invalid types might still be processed
             assert true
         end
@@ -53,7 +53,7 @@ defmodule Bastille.Features.Api.RPC.ExtractKeysForSigningTest do
       assert is_map(result)
 
       case result do
-        %{"result" => %{"address" => address, "sign_transaction_payload" => payload}} ->
+        %{"address" => address, "sign_transaction_payload" => payload} ->
           # Verify address format
           assert is_binary(address)
           prefix = Application.get_env(:bastille, :address_prefix, "1789")
@@ -166,7 +166,7 @@ defmodule Bastille.Features.Api.RPC.ExtractKeysForSigningTest do
       })
 
       case result do
-        %{"result" => %{"address" => address, "sign_transaction_payload" => payload}} ->
+        %{"address" => address, "sign_transaction_payload" => payload} ->
           assert is_binary(address)
           assert is_map(payload)
 
@@ -189,7 +189,7 @@ defmodule Bastille.Features.Api.RPC.ExtractKeysForSigningTest do
       })
 
       case result do
-        %{"result" => %{"sign_transaction_payload" => payload}} ->
+        %{"sign_transaction_payload" => payload} ->
           for key_name <- ["dilithium_key", "falcon_key", "sphincs_key"] do
             if Map.has_key?(payload, key_name) do
               private_key = payload[key_name]
@@ -212,7 +212,7 @@ defmodule Bastille.Features.Api.RPC.ExtractKeysForSigningTest do
       })
 
       case result do
-        %{"result" => %{"address" => address}} ->
+        %{"address" => address} ->
           assert is_binary(address)
 
           prefix = Application.get_env(:bastille, :address_prefix, "1789")
@@ -243,8 +243,8 @@ defmodule Bastille.Features.Api.RPC.ExtractKeysForSigningTest do
       # Should never crash, always return a map
       assert is_map(result)
 
-      # Should either return result or error
-      assert Map.has_key?(result, "result") or Map.has_key?(result, "error")
+      # Should either return data (with address) or an error
+      assert Map.has_key?(result, "address") or Map.has_key?(result, "error")
     end
 
     test "handles key derivation errors gracefully" do

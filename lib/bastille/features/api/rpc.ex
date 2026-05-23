@@ -10,7 +10,6 @@ defmodule Bastille.Features.Api.RPC do
     ExtractKeysForSigning,
     GenerateAddress,
     GetBalance,
-    GetImmatureCoinbases,
     GetInfo,
     GetTransaction,
     SignTransaction,
@@ -40,8 +39,6 @@ defmodule Bastille.Features.Api.RPC do
             SubmitTransaction.call(params)
           "get_balance" ->
             GetBalance.call(params)
-          "get_immature_coinbases" ->
-            GetImmatureCoinbases.call(params)
           "get_transaction" ->
             GetTransaction.call(params)
           "get_info" ->

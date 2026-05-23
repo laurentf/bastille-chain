@@ -1,149 +1,187 @@
 defmodule Bastille.Features.Api.RPC.GetTransactionTest do
-
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Bastille.Features.Api.RPC.GetTransaction
+  alias Bastille.Features.Block.Block
+  alias Bastille.Features.Transaction.{Mempool, Transaction}
+  alias Bastille.Infrastructure.Storage.CubDB.{Blocks, Index}
 
   @moduletag :unit
 
-  describe "get_transaction RPC method" do
-    test "handles missing hash parameter" do
-      # GetTransaction implementation requires hash parameter
-      assert_raise FunctionClauseError, fn ->
-        GetTransaction.call(%{})
-      end
+  # Other test modules (notably mempool_test.exs) stop and restart the global
+  # Mempool GenServer in their own setup/teardown. The OTP supervisor brings
+  # it back up, but there's a brief window where the named process is gone —
+  # if our test fires during that window, GenServer.call exits :noproc.
+  # Wait for the named processes we depend on to be alive before running.
+  setup do
+    for name <- [Mempool, Blocks, Index] do
+      wait_for_named(name, 5_000)
     end
 
-    test "handles empty hash parameter" do
+    :ok
+  end
+
+  defp wait_for_named(name, timeout_ms) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_for_named(name, deadline)
+  end
+
+  defp do_wait_for_named(name, deadline) do
+    case Process.whereis(name) do
+      pid when is_pid(pid) ->
+        :ok
+
+      nil ->
+        if System.monotonic_time(:millisecond) >= deadline do
+          flunk("Process #{inspect(name)} did not come back up in time")
+        else
+          Process.sleep(20)
+          do_wait_for_named(name, deadline)
+        end
+    end
+  end
+
+  describe "input validation" do
+    test "returns an error for a missing hash parameter" do
+      result = GetTransaction.call(%{})
+      assert %{error: msg} = result
+      assert msg =~ "hash"
+    end
+
+    test "returns an error for an empty hash" do
       result = GetTransaction.call(%{"hash" => ""})
-
-      assert is_map(result)
-      case result do
-        %{hash: "", transaction: _} -> assert true
-        %{error: _} -> assert true
-      end
+      assert %{error: msg} = result
+      assert msg =~ "Invalid"
     end
 
-    test "processes valid hash parameter" do
-      test_hash = "0123456789abcdef"
-
-      result = GetTransaction.call(%{"hash" => test_hash})
-
-      assert is_map(result)
-
-      case result do
-        %{hash: ^test_hash, transaction: transaction} ->
-          # Verify transaction data (can be nil if not found)
-          assert is_map(transaction) or is_nil(transaction)
-
-        %{error: error_msg} ->
-          # Error acceptable when blockchain service unavailable
-          assert is_binary(error_msg)
-          assert String.length(error_msg) > 0
-
-        _ ->
-          flunk("Unexpected response format: #{inspect(result)}")
-      end
+    test "returns an error for a non-hex hash" do
+      result = GetTransaction.call(%{"hash" => "definitely_not_hex_!@#"})
+      assert %{error: _} = result
     end
 
-    test "handles various hash formats" do
-      hash_formats = [
-        "abcdef123456789",           # Short hash
-        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", # Long hash
-        "ABCDEF123",                 # Uppercase
-        "mixed_Case_123"             # Mixed case
-      ]
-
-      for hash <- hash_formats do
-        result = GetTransaction.call(%{"hash" => hash})
-        assert is_map(result)
-
-        # Should handle any hash format gracefully
-        case result do
-          %{hash: _, transaction: _} -> assert true
-          %{error: _} -> assert true
-          _ -> assert true
-        end
-      end
+    test "returns an error for a wrong-length hex hash" do
+      # 16-char hex = 8 bytes, not 32
+      result = GetTransaction.call(%{"hash" => "0123456789abcdef"})
+      assert %{error: _} = result
     end
 
-    test "handles non-string hash parameter" do
-      invalid_hashes = [123, nil, %{}, []]
-
-      for hash <- invalid_hashes do
-        result = GetTransaction.call(%{"hash" => hash})
-        assert is_map(result)
-        case result do
-          %{hash: _, transaction: _} -> assert true
-          %{error: _} -> assert true
-        end
+    test "returns an error for a non-string hash" do
+      for bad <- [nil, 123, %{}, []] do
+        result = GetTransaction.call(%{"hash" => bad})
+        assert %{error: _} = result, "Expected error for #{inspect(bad)}"
       end
     end
   end
 
-  describe "parameter validation" do
-    test "requires hash parameter" do
-      empty_params = [%{}, %{"other" => "param"}]
-
-      for params <- empty_params do
-        assert_raise FunctionClauseError, fn ->
-          GetTransaction.call(params)
-        end
-      end
+  describe "lookup paths" do
+    test "returns not_found for an unknown 32-byte hash" do
+      unknown = Base.encode16(:crypto.strong_rand_bytes(32), case: :lower)
+      result = GetTransaction.call(%{"hash" => unknown})
+      assert %{status: "not_found", hash: ^unknown} = result
     end
 
-    test "ignores additional parameters" do
-      result = GetTransaction.call(%{
-        "hash" => "test_hash",
-        "unused" => "parameter",
-        "ignored" => 123
-      })
+    test "finds a pending transaction in the mempool" do
+      # Build a structurally valid tx and inject it into the mempool with
+      # the test-mode skip flags applied at app startup.
+      Mempool.clear()
 
-      assert is_map(result)
-      # Should process the hash parameter and ignore others
+      tx =
+        Transaction.new(
+          from: "f789" <> String.duplicate("a", 40),
+          to: "f789" <> String.duplicate("b", 40),
+          amount: 1_000_000,
+          nonce: 1
+        )
+
+      :ok = Mempool.add_transaction(tx)
+
+      hex = Base.encode16(tx.hash, case: :lower)
+      result = GetTransaction.call(%{"hash" => hex})
+
+      assert %{status: "pending", hash: ^hex, transaction: tx_map} = result
+      assert tx_map["from"] == tx.from
+      assert tx_map["to"] == tx.to
+      assert tx_map["amount"] == tx.amount
+
+      Mempool.clear()
+    end
+
+    test "finds a confirmed transaction via the index, with block info and confirmations" do
+      # Build a tx, wrap it in a block, store + index, then look it up.
+      tx =
+        Transaction.new(
+          from: "f789" <> String.duplicate("c", 40),
+          to: "f789" <> String.duplicate("d", 40),
+          amount: 2_000_000,
+          nonce: 1
+        )
+
+      block =
+        Block.new(
+          index: 9_999,
+          previous_hash: <<0::256>>,
+          transactions: [tx],
+          difficulty: 1
+        )
+
+      :ok = Blocks.store_block(block)
+
+      partition = current_partition()
+
+      :ok =
+        Index.index_transaction(%Index.TransactionIndex{
+          tx_hash: tx.hash,
+          partition: partition,
+          block_hash: block.hash,
+          from_address: tx.from,
+          to_address: tx.to,
+          tx_index: 0,
+          timestamp: tx.timestamp
+        })
+
+      hex = Base.encode16(tx.hash, case: :lower)
+      result = GetTransaction.call(%{"hash" => hex})
+
+      assert %{
+               status: "confirmed",
+               hash: ^hex,
+               block_height: 9_999,
+               block_hash: bh_hex,
+               confirmations: c,
+               transaction: tx_map
+             } = result
+
+      assert bh_hex == Base.encode16(block.hash, case: :lower)
+      assert is_integer(c)
+      assert tx_map["from"] == tx.from
+      assert tx_map["to"] == tx.to
+    end
+
+    test "mempool path takes precedence over the index (just-confirmed tx still in mempool)" do
+      # Edge case: a tx might briefly live in both mempool (not yet evicted)
+      # and the confirmed index. We treat the mempool view as more recent.
+      Mempool.clear()
+
+      tx =
+        Transaction.new(
+          from: "f789" <> String.duplicate("e", 40),
+          to: "f789" <> String.duplicate("f", 40),
+          amount: 5_000_000,
+          nonce: 1
+        )
+
+      :ok = Mempool.add_transaction(tx)
+      hex = Base.encode16(tx.hash, case: :lower)
+
+      result = GetTransaction.call(%{"hash" => hex})
+      assert %{status: "pending"} = result
+
+      Mempool.clear()
     end
   end
 
-  describe "response format" do
-    test "successful response contains transaction" do
-      result = GetTransaction.call(%{"hash" => "sample_hash"})
-
-      case result do
-        %{hash: _, transaction: transaction} ->
-          assert is_map(transaction) or is_nil(transaction)
-
-        %{error: _} ->
-          # Error response is acceptable
-          assert true
-      end
-    end
-
-    test "transaction not found response" do
-      result = GetTransaction.call(%{"hash" => "nonexistent_hash"})
-
-      # Should handle non-existent transactions gracefully
-      case result do
-        %{hash: _, transaction: nil} -> assert true
-        %{hash: _, transaction: _} -> assert true
-        %{error: _} -> assert true  # Errors acceptable
-      end
-    end
-
-    test "always returns a map" do
-      result = GetTransaction.call(%{"hash" => "any_hash"})
-      assert is_map(result)
-    end
-  end
-
-  describe "error handling" do
-    test "handles service unavailable gracefully" do
-      result = GetTransaction.call(%{"hash" => "test_hash"})
-
-      # Should never crash, always return a map
-      assert is_map(result)
-
-      # Should either return transaction or error
-      assert Map.has_key?(result, :transaction) or Map.has_key?(result, :error)
-    end
+  defp current_partition do
+    {{year, month, _}, _} = :calendar.universal_time()
+    "#{year}#{String.pad_leading("#{month}", 2, "0")}"
   end
 end

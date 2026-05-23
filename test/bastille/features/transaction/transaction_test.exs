@@ -1,7 +1,8 @@
 defmodule Bastille.Features.Transaction.TransactionTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false  # Some tests mutate Application env (network/chain_id)
   alias Bastille.Features.Transaction.Transaction
   alias Bastille.Features.Tokenomics.Token
+  alias Bastille.Shared.Crypto
 
   @moduletag :unit
 
@@ -177,6 +178,121 @@ defmodule Bastille.Features.Transaction.TransactionTest do
       assert total_cost > tx.amount
       assert total_cost > tx.fee
       assert is_integer(total_cost)
+    end
+  end
+
+  describe "serialize_for_signing — message integrity" do
+    # The message signed by Crypto.sign/2 MUST cover all fields whose
+    # modification by a network attacker could harm the sender. Historically
+    # `fee` and `data` were NOT covered: this regression test ensures they
+    # are part of the signed payload going forward.
+
+    setup do
+      base_opts = [
+        from: "f789" <> String.duplicate("a", 40),
+        to: "f789" <> String.duplicate("b", 40),
+        amount: 1_000_000,
+        nonce: 1,
+        timestamp: 1_700_000_000,
+        data: "original payload"
+      ]
+
+      tx = Transaction.new(base_opts)
+      {:ok, tx: tx, base_opts: base_opts}
+    end
+
+    test "is deterministic for identical input", %{tx: tx} do
+      assert Transaction.serialize_for_signing(tx) ==
+               Transaction.serialize_for_signing(tx)
+    end
+
+    test "differs when fee differs", %{tx: tx} do
+      msg_a = Transaction.serialize_for_signing(tx)
+      msg_b = Transaction.serialize_for_signing(%{tx | fee: tx.fee + 1})
+      assert msg_a != msg_b
+    end
+
+    test "differs when data differs", %{tx: tx} do
+      msg_a = Transaction.serialize_for_signing(tx)
+      msg_b = Transaction.serialize_for_signing(%{tx | data: tx.data <> "x"})
+      assert msg_a != msg_b
+    end
+
+    test "differs across chain_ids (testnet vs mainnet)", %{tx: tx} do
+      original = Application.get_env(:bastille, :network)
+
+      Application.put_env(:bastille, :network, :testnet)
+      msg_testnet = Transaction.serialize_for_signing(tx)
+
+      Application.put_env(:bastille, :network, :mainnet)
+      msg_mainnet = Transaction.serialize_for_signing(tx)
+
+      assert msg_testnet != msg_mainnet
+
+      Application.put_env(:bastille, :network, original)
+    end
+
+    test "differs when amount/nonce/timestamp differ (existing protection still in place)", %{tx: tx} do
+      msg = Transaction.serialize_for_signing(tx)
+
+      assert msg != Transaction.serialize_for_signing(%{tx | amount: tx.amount + 1})
+      assert msg != Transaction.serialize_for_signing(%{tx | nonce: tx.nonce + 1})
+      assert msg != Transaction.serialize_for_signing(%{tx | timestamp: tx.timestamp + 1})
+    end
+
+    test "end-to-end: tampering fee after signing breaks the 2/3 PQ signature", %{tx: tx} do
+      # Sign with a real PQ keypair, then verify directly via Crypto (bypasses
+      # State.get_public_keys to keep this a pure unit test).
+      kp = Crypto.generate_pq_keypair()
+      signed = Transaction.sign(tx, kp)
+
+      pubs = %{
+        dilithium: kp.dilithium.public,
+        falcon: kp.falcon.public,
+        sphincs: kp.sphincs.public
+      }
+
+      assert Crypto.verify(Transaction.serialize_for_signing(signed), signed.signature, pubs)
+
+      tampered = %{signed | fee: signed.fee + 1}
+
+      refute Crypto.verify(Transaction.serialize_for_signing(tampered), tampered.signature, pubs)
+    end
+
+    test "end-to-end: tampering data after signing breaks the 2/3 PQ signature", %{tx: tx} do
+      kp = Crypto.generate_pq_keypair()
+      signed = Transaction.sign(tx, kp)
+
+      pubs = %{
+        dilithium: kp.dilithium.public,
+        falcon: kp.falcon.public,
+        sphincs: kp.sphincs.public
+      }
+
+      tampered = %{signed | data: signed.data <> <<0>>}
+
+      refute Crypto.verify(Transaction.serialize_for_signing(tampered), tampered.signature, pubs)
+    end
+
+    test "end-to-end: a signature minted on testnet does not verify on mainnet", %{tx: tx} do
+      original = Application.get_env(:bastille, :network)
+
+      Application.put_env(:bastille, :network, :testnet)
+      kp = Crypto.generate_pq_keypair()
+      signed_on_testnet = Transaction.sign(tx, kp)
+
+      pubs = %{
+        dilithium: kp.dilithium.public,
+        falcon: kp.falcon.public,
+        sphincs: kp.sphincs.public
+      }
+
+      # Same tx, same signature, but verifier is now on mainnet → message bytes differ → rejected.
+      Application.put_env(:bastille, :network, :mainnet)
+      message_as_seen_by_mainnet = Transaction.serialize_for_signing(signed_on_testnet)
+      refute Crypto.verify(message_as_seen_by_mainnet, signed_on_testnet.signature, pubs)
+
+      Application.put_env(:bastille, :network, original)
     end
   end
 

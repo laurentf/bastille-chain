@@ -9,7 +9,7 @@ defmodule Bastille.Features.Transaction.Mempool do
   use GenServer
   require Logger
 
-  alias Bastille.Features.Chain.Chain
+  alias Bastille.Features.Chain.TransactionValidator
   alias Bastille.Features.Transaction.Transaction
 
   # Default configuration (Bitcoin-inspired values)
@@ -37,10 +37,19 @@ defmodule Bastille.Features.Transaction.Mempool do
 
   # Client API
 
-  @doc "Start the mempool"
+  @doc """
+  Start the mempool.
+
+  Pass `name: SomeOtherName` to register the GenServer under a name other
+  than `Mempool` — useful for tests that want a sandboxed instance with
+  custom `min_fee` / `max_size` settings, without disturbing the global
+  supervised Mempool. The supervised instance is started by the
+  application with `name: Mempool` (default).
+  """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    {name, init_opts} = Keyword.pop(opts, :name, __MODULE__)
+    GenServer.start_link(__MODULE__, init_opts, name: name)
   end
 
   @doc "Add a transaction to the mempool"
@@ -225,16 +234,15 @@ defmodule Bastille.Features.Transaction.Mempool do
     end
   end
 
-  defp validate_transaction_against_chain(%Transaction{} = tx) do
-    Chain.validate_transaction(tx)
-  end
-
-  # TEST ONLY: Skip chain validation when skip_chain_validation is true
+  # Validation against on-chain state. Goes through the pure
+  # `TransactionValidator` (reads `State` storage directly) rather than
+  # `GenServer.call(Chain, …)` — otherwise a long `add_block` on Chain
+  # would block any concurrent tx submission via the mempool.
   defp validate_transaction_against_chain(%Transaction{}, %__MODULE__{skip_chain_validation: true}) do
     :ok
   end
   defp validate_transaction_against_chain(%Transaction{} = tx, _state) do
-    validate_transaction_against_chain(tx)
+    TransactionValidator.validate(tx)
   end
 
   defp check_mempool_capacity(%__MODULE__{tx_by_hash: tx_by_hash, max_size: max_size}) do

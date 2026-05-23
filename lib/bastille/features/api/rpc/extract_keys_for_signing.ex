@@ -22,20 +22,19 @@ defmodule Bastille.Features.Api.RPC.ExtractKeysForSigning do
 
     case Bastille.derive_keys_from_seed(mnemonic_str) do
       {:ok, result} ->
+        # Flat: dispatcher wraps under `result:` already.
         %{
-          "result" => %{
-            "message" => "⚠️  DEV/TEST ONLY - Private keys for sign_transaction payload",
-            "address" => result.address,
-            "sign_transaction_payload" => %{
-              "dilithium_key" => result.keys.dilithium.private_key,
-              "falcon_key" => result.keys.falcon.private_key,
-              "sphincs_key" => result.keys.sphincs.private_key
-            },
-            "usage_example" => %{
-              "step_1" => "Create unsigned transaction with this address",
-              "step_2" => "Use sign_transaction_payload private keys to sign (3 keys only)",
-              "step_3" => "Submit signed transaction"
-            }
+          "message" => "⚠️  DEV/TEST ONLY - Private keys for sign_transaction payload",
+          "address" => result.address,
+          "sign_transaction_payload" => %{
+            "dilithium_key" => result.keys.dilithium.private_key,
+            "falcon_key" => result.keys.falcon.private_key,
+            "sphincs_key" => result.keys.sphincs.private_key
+          },
+          "usage_example" => %{
+            "step_1" => "Create unsigned transaction with this address",
+            "step_2" => "Use sign_transaction_payload private keys to sign (3 keys only)",
+            "step_3" => "Submit signed transaction"
           }
         }
       {:error, message} ->

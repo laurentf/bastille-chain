@@ -720,18 +720,16 @@ defmodule Bastille do
   # Private functions
 
   defp validate_bastille_address(address) when is_binary(address) do
-    prefix = Application.get_env(:bastille, :address_prefix, "1789")
-
     cond do
-      address == prefix <> "Genesis" -> :ok  # Special genesis address
-      String.starts_with?(address, prefix) ->
-        if Crypto.valid_address?(address) do
-          :ok
-        else
-          {:error, :invalid_bastille_address}
-        end
+      address == "1789Genesis" ->
+        :ok
+
+      Bastille.Shared.Address.valid?(address) ->
+        :ok
+
       true ->
-        {:error, {:invalid_address_format, expected: "#{prefix}...", got: "invalid"}}
+        prefix = Application.get_env(:bastille, :address_prefix, "1789")
+        {:error, {:invalid_address_format, expected: "#{prefix}...", got: address}}
     end
   end
 

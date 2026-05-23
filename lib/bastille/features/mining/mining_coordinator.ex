@@ -16,9 +16,6 @@ defmodule Bastille.Features.Mining.MiningCoordinator do
   alias Bastille.Features.Transaction.Mempool
   alias Bastille.Features.Consensus, as: Consensus
 
-  # Constants
-  @min_block_time_ms 1000  # Minimum 1 second for safety in difficulty calculation
-
   defstruct [
     :mining_address,
     :mining_enabled,
@@ -60,11 +57,15 @@ defmodule Bastille.Features.Mining.MiningCoordinator do
   end
 
   @doc """
-  Gets the current mining status.
+  Gets the current mining status. Lock-free read via :persistent_term so that
+  RPC endpoints stay responsive while this GenServer is busy mining a block.
   """
   @spec mining_status() :: %{enabled: boolean(), address: binary() | nil}
   def mining_status do
-    GenServer.call(__MODULE__, :mining_status)
+    case :persistent_term.get({__MODULE__, :status}, nil) do
+      %{} = cached -> cached
+      _ -> GenServer.call(__MODULE__, :mining_status)
+    end
   end
 
   @doc """
@@ -76,19 +77,21 @@ defmodule Bastille.Features.Mining.MiningCoordinator do
   end
 
   @doc """
-  Validates a transaction.
+  Validates a transaction. Runs in the caller's process — no GenServer.call —
+  so incoming P2P transactions can still be validated while we are mining a
+  block locally.
   """
   @spec validate_transaction(Transaction.t()) :: :ok | {:error, term()}
   def validate_transaction(%Bastille.Features.Transaction.Transaction{} = tx) do
-    GenServer.call(__MODULE__, {:validate_transaction, tx})
+    validate_transaction_full(tx)
   end
 
   @doc """
-  Validates a block.
+  Validates a block. Same reasoning as validate_transaction/1 — runs inline.
   """
   @spec validate_block(Block.t()) :: :ok | {:error, term()}
   def validate_block(%Bastille.Features.Block.Block{} = block) do
-    GenServer.call(__MODULE__, {:validate_block, block})
+    validate_block_full(block)
   end
 
   # Server Callbacks
@@ -112,6 +115,7 @@ defmodule Bastille.Features.Mining.MiningCoordinator do
         state
       end
 
+    publish_mining_status(final_state)
     Logger.info("🎯 Validator started: mining #{if mining_enabled, do: "enabled", else: "disabled"}")
     {:ok, final_state}
   end
@@ -127,6 +131,7 @@ defmodule Bastille.Features.Mining.MiningCoordinator do
         }
         |> start_mining_task()
 
+        publish_mining_status(new_state)
         Logger.info("🎯 Mining started to address: #{Base.encode16(mining_address, case: :lower)}")
         {:reply, :ok, new_state}
 
@@ -138,6 +143,7 @@ defmodule Bastille.Features.Mining.MiningCoordinator do
   @impl true
   def handle_call(:stop_mining, _from, state) do
     new_state = %{state | mining_enabled: false, mining_state: :idle}
+    publish_mining_status(new_state)
     Logger.info("⏹️ Mining stopped by request")
     {:reply, :ok, new_state}
   end
@@ -173,15 +179,8 @@ defmodule Bastille.Features.Mining.MiningCoordinator do
     end
   end
 
-  def handle_call({:validate_transaction, %Bastille.Features.Transaction.Transaction{} = tx}, _from, %__MODULE__{} = state) do
-    result = validate_transaction_full(tx)
-    {:reply, result, state}
-  end
-
-  def handle_call({:validate_block, %Bastille.Features.Block.Block{} = block}, _from, %__MODULE__{} = state) do
-    result = validate_block_full(block)
-    {:reply, result, state}
-  end
+  # validate_transaction/1 and validate_block/1 now run in the caller process
+  # (no handle_call) so they don't queue behind the mining handler.
 
   @impl true
   def handle_info(:mine_next_block, %{mining_enabled: false} = state) do
@@ -195,8 +194,11 @@ defmodule Bastille.Features.Mining.MiningCoordinator do
 
   def handle_info(:mine_next_block, %{mining_state: :idle, mining_enabled: true, mining_address: address} = state)
       when is_binary(address) do
-    # Start mining synchronously
+    # Mining runs synchronously inside this handler. RPC status calls don't
+    # block because mining_status is published to :persistent_term and the
+    # consensus engine isn't held during the hot loop (see Consensus.Engine).
     new_state = %{state | mining_state: :mining}
+    publish_mining_status(new_state)
 
     case create_and_mine_block(address) do
       {:ok, block} ->
@@ -209,69 +211,37 @@ defmodule Bastille.Features.Mining.MiningCoordinator do
         # Submit to blockchain
         case Bastille.Features.Chain.Chain.add_block(block) do
           :ok ->
-            # Remove mined transactions from mempool
             block.transactions
             |> Enum.map(& &1.hash)
             |> tap(&Mempool.remove_transactions/1)
             |> length()
             |> then(&Logger.info("🗑️ Mempool cleanup: #{&1} transactions removed"))
 
-            # Schedule next mining cycle
-            final_state = %{new_state | mining_state: :idle}
-            if final_state.mining_enabled do
-              Process.send_after(self(), :mine_next_block, 100)  # Small delay between blocks
-            end
-            {:noreply, final_state}
+            schedule_next(state, 100)
 
           {:orphan, :added_to_pool} ->
             Logger.info("🔄 MINED BLOCK BECAME ORPHAN - added to orphan pool")
-            Logger.info("   └─ Block will be processed when parent arrives")
-
-            # Continue mining - this is normal in concurrent environments
-            final_state = %{new_state | mining_state: :idle}
-            if final_state.mining_enabled do
-              Process.send_after(self(), :mine_next_block, 100)  # Quick retry for orphan
-            end
-            {:noreply, final_state}
+            schedule_next(state, 100)
 
           {:orphan, parent_hash} ->
             Logger.info("🔄 MINED BLOCK BECAME ORPHAN - waiting for parent")
             Logger.info("   └─ Missing parent: #{Base.encode16(parent_hash) |> String.slice(0, 8)}...")
-
-            # Continue mining - this is normal in concurrent environments
-            final_state = %{new_state | mining_state: :idle}
-            if final_state.mining_enabled do
-              Process.send_after(self(), :mine_next_block, 100)  # Quick retry for orphan
-            end
-            {:noreply, final_state}
+            schedule_next(state, 100)
 
           {:error, reason} ->
             Logger.error("❌ BLOCK REJECTED BY BLOCKCHAIN!")
             Logger.error("   └─ Reason: #{inspect(reason)}")
-
-            # Retry after error
-            final_state = %{new_state | mining_state: :idle}
-            if final_state.mining_enabled do
-              Process.send_after(self(), :mine_next_block, 1000)  # Longer delay after error
-            end
-            {:noreply, final_state}
+            schedule_next(state, 1000)
         end
 
       {:error, reason} ->
         Logger.error("❌ MINING FAILED!")
         Logger.error("   └─ Reason: #{inspect(reason)}")
-
-        # Retry after error
-        final_state = %{new_state | mining_state: :idle}
-        if final_state.mining_enabled do
-          Process.send_after(self(), :mine_next_block, 1000)  # Longer delay after error
-        end
-        {:noreply, final_state}
+        schedule_next(state, 1000)
     end
   end
 
   def handle_info(:mine_next_block, state) do
-    # No address configured, can't mine
     {:noreply, state}
   end
 
@@ -348,42 +318,24 @@ defmodule Bastille.Features.Mining.MiningCoordinator do
       Consensus.Engine.set_difficulty(1)
       1
     else
-      Logger.info("📊 Analyzing recent blocks for automatic adjustment...")
-      # Get recent block times for lightweight time-based adjustment (OPTIMIZED)
-      recent_block_times = Chain.get_recent_block_times(10)
+      # Delegate the actual adjustment to the consensus engine. It respects
+      # `difficulty_adjustment_interval` (no change between adjustment points)
+      # and caps the change factor — bypassing it here caused the difficulty
+      # to multiply on every single block and explode (1 → 65536 in ~9 blocks).
+      # We exclude genesis (index 0) from the window so its symbolic timestamp
+      # doesn't poison the actual-time calculation.
+      recent_block_times =
+        Chain.get_recent_block_times(10)
+        |> Enum.reject(&(&1.index == 0))
 
-      if length(recent_block_times) >= 2 do
-        # Calculate actual vs target time (Bitcoin-style)
-        actual_time = calculate_block_time_average_from_times(recent_block_times)
-        # Get target time from consensus configuration instead of hardcoded value
-        consensus_info = Consensus.Engine.info()
-        target_time = Map.get(consensus_info, :target_block_time, 10_000)
+      current_difficulty = Consensus.Engine.get_difficulty()
+      new_difficulty = Consensus.Engine.adjust_difficulty_fast(recent_block_times)
 
-        current_difficulty = Consensus.Engine.get_difficulty()
-
-        # Bitcoin-style adjustment: difficulty = old_difficulty × (target_time / actual_time)
-        # Protect against division by zero or negative times
-        safe_actual_time = max(@min_block_time_ms, actual_time)  # Minimum 1 second
-        time_ratio = target_time / safe_actual_time
-
-        # Limit adjustment to prevent wild swings (max 4x change like Bitcoin)
-        limited_ratio = max(0.25, min(4.0, time_ratio))
-
-        new_difficulty = max(1, round(current_difficulty * limited_ratio))
-
-        Logger.info("🎯 Dynamic difficulty adjustment: #{current_difficulty} → #{new_difficulty}")
-        Logger.info("   └─ Actual block time: #{round(actual_time)}ms, Target: #{target_time}ms")
-        Logger.info("   └─ Time ratio: #{Float.round(time_ratio, 3)}, Limited ratio: #{Float.round(limited_ratio, 3)}")
-
-        # Update consensus engine with new difficulty (FAST API)
-        Consensus.Engine.adjust_difficulty_fast(recent_block_times)
-        new_difficulty
-      else
-        # Not enough blocks yet, use current difficulty
-        current = Consensus.Engine.get_difficulty()
-        Logger.info("� Using current difficulty #{current} (not enough blocks for adjustment)")
-        current
+      if new_difficulty != current_difficulty do
+        Logger.info("🎯 Difficulty adjusted: #{current_difficulty} → #{new_difficulty}")
       end
+
+      new_difficulty
     end
 
     Logger.info("🔨 CREATING BLOCK TEMPLATE")
@@ -528,34 +480,31 @@ defmodule Bastille.Features.Mining.MiningCoordinator do
     end)
   end
 
-  # Optimized block time calculation using only timestamps (MUCH FASTER)
-  defp calculate_block_time_average_from_times(block_times) when length(block_times) < 2, do: 10_000  # Default 10s
-  defp calculate_block_time_average_from_times(block_times) do
-    # Sort by index to ensure chronological order
-    sorted_times = Enum.sort_by(block_times, & &1.index)
-
-    # Calculate time differences between consecutive blocks using actual timestamps
-    time_diffs =
-      sorted_times
-      |> Enum.chunk_every(2, 1, :discard)
-      |> Enum.map(fn [prev, curr] ->
-        curr.timestamp - prev.timestamp
-      end)
-
-    # Return average time in milliseconds
-    if length(time_diffs) > 0 do
-      average = Enum.sum(time_diffs) / length(time_diffs)
-      # Protect against zero or negative times (clock issues, same timestamps)
-      max(@min_block_time_ms, average)  # Minimum 1 second between blocks
-    else
-      10_000  # Default 10 seconds
-    end
-  end
-
-
-
   defp format_hash(hash) when is_binary(hash) do
     hash |> Base.encode16(case: :lower) |> String.slice(0, 32)
   end
   defp format_hash(_), do: "invalid_hash"
+
+  # Reschedule the mining loop and publish the new (idle) status for lock-free
+  # readers. Mining runs in this GenServer's message-handler, so during mining
+  # any GenServer.call against us blocks — we publish to :persistent_term so
+  # status queries don't time out.
+  defp schedule_next(state, delay_ms) do
+    final_state = %{state | mining_state: :idle}
+    publish_mining_status(final_state)
+
+    if final_state.mining_enabled do
+      Process.send_after(self(), :mine_next_block, delay_ms)
+    end
+
+    {:noreply, final_state}
+  end
+
+  defp publish_mining_status(%__MODULE__{} = state) do
+    :persistent_term.put({__MODULE__, :status}, %{
+      enabled: state.mining_enabled,
+      address: state.mining_address,
+      state: state.mining_state
+    })
+  end
 end

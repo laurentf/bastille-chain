@@ -1,7 +1,12 @@
 # Test Helper for Bastille Blockchain
 # Configures test environment and loads test utilities
 
-ExUnit.start()
+# Exclude integration tests by default — they stop and restart the global
+# storage GenServers (Blocks, Chain, State, Index, …) which destabilizes the
+# rest of the suite when run alongside unit tests. Run them on demand with:
+#   mix test --include integration
+# or in a dedicated CI step.
+ExUnit.start(exclude: [:integration])
 
 # Configure test logger
 Logger.configure(level: :warning)

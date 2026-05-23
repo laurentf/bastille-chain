@@ -2,17 +2,12 @@ defmodule Bastille.Features.Block.Block do
   @moduledoc """
   Core Block data structure and operations.
 
-  Represents a block in the blockchain with  defp calculate_genesis_hash(block) do
-    # Calculate a deterministic genesis hash
-    # This ensures the genesis hash is always the same
-    block_data = serialize_for_hash(block)
-
-    # Simple hash calculation for genesis
-    :crypto.hash(:sha256, block_data)
-  endransaction data.
+  Represents a block in the blockchain with a header (index, timestamps,
+  difficulty, nonce, previous hash, merkle root, consensus metadata) and a
+  list of transactions.
   """
 
-  alias Bastille.Shared.CryptoUtils
+  alias Bastille.Shared.{Address, CryptoUtils}
   alias Bastille.Features.Mining.Mining
   alias Bastille.Features.Transaction.Transaction
 
@@ -102,7 +97,8 @@ defmodule Bastille.Features.Block.Block do
   - Timestamp: July 14, 2025 00:00:00 UTC (Bastille Day)
   - Previous hash: All zeros (no previous block)
   - Difficulty: 0 (no mining required for genesis)
-  - Fixed genesis transaction to "1789Revolution" address
+  - Genesis transaction sends initial supply to the env-configured zero address
+    (prefix + 40 zeros — "1789..." in prod, "f789..." in testnet)
   - Hardcoded hash (not mined)
   """
   @spec genesis() :: t()
@@ -110,10 +106,13 @@ defmodule Bastille.Features.Block.Block do
     # July 14, 2025 00:00:00 UTC (Bastille Day) - Unix timestamp
     bastille_day_2025 = 1_752_422_400
 
-    # Create the genesis transaction
+    # Create the genesis transaction. "1789Genesis" is the synthetic sender
+    # label for coinbase semantics (special-cased in Chain). The recipient is
+    # the env-aware zero address so it conforms to the configured prefix+hex
+    # format and validates uniformly in testnet and mainnet.
     genesis_transaction = Transaction.new([
       from: "1789Genesis",
-      to: "1789Revolution",
+      to: Address.zero(),
       amount: 178_900_000_000_000_000, # 1789 BAST initial supply (1 block reward worth)
       fee: 0,
       nonce: 0,
@@ -123,8 +122,11 @@ defmodule Bastille.Features.Block.Block do
       signature: %{type: :coinbase}
     ])
 
-    # Calculate merkle root for genesis transaction
-    genesis_merkle_root = Transaction.calculate_hash(genesis_transaction)
+    # Merkle root of a single-transaction block is the transaction hash itself
+    # (binary). Transaction.calculate_hash/1 returns the whole struct with the
+    # hash field populated, so we take the .hash field to keep the merkle_root
+    # as a 32-byte binary like every other block.
+    genesis_merkle_root = Transaction.hash(genesis_transaction)
 
     # Create genesis block with hardcoded values
     genesis_block = %__MODULE__{

@@ -1,17 +1,14 @@
 # 🏰 Bastille Blockchain - Docker Deployment Guide
 
+> **Status:** untested. This guide documents the intended Docker workflow but
+> the images have not been validated end-to-end against the current codebase.
+> Use as a starting point, not a turnkey recipe.
+
 ## Overview
 
-This directory contains all Docker-related files for deploying the Bastille blockchain using Docker, whether for a full node, mining node, or developm4. **Runtime Image**: Minimal image witdocker exec -it bastille-node /opt/bastille/bin/bastille remote
-```
-
-## 💾 Data Persistence
-
-### Docker Volumes runtime dependencies
-
-## 📊 Monitoring and Maintenance
-
-### Logsnvironment.
+This directory contains all Docker-related files for deploying the Bastille
+blockchain using Docker, whether for a full node, mining node, or development
+environment.
 
 ## 📁 Directory Structure
 

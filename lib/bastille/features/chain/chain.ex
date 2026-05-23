@@ -20,8 +20,7 @@ defmodule Bastille.Features.Chain.Chain do
   alias Bastille.Features.Transaction.Transaction
   alias Bastille.Infrastructure.Storage.CubDB.{Blocks, Chain, Index, State}
   # Mempool referenced through its public API where needed
-  alias Bastille.Features.Chain.OrphanManager
-  alias Bastille.Features.Tokenomics.CoinbaseMaturity
+  alias Bastille.Features.Chain.{OrphanManager, TransactionValidator}
 
   defstruct [
     :blocks,
@@ -115,10 +114,16 @@ defmodule Bastille.Features.Chain.Chain do
 
   @doc """
   Validates a transaction against the current chain state.
+
+  Runs in the caller's process — does NOT take a `GenServer.call(Chain, …)`.
+  Validation reads `State` directly via the pure
+  `Bastille.Features.Chain.TransactionValidator`, so callers (mempool,
+  miner, RPC) don't queue behind a long-running `add_block` on the Chain
+  GenServer.
   """
   @spec validate_transaction(Transaction.t()) :: :ok | {:error, term()}
   def validate_transaction(%Bastille.Features.Transaction.Transaction{} = tx) do
-    GenServer.call(__MODULE__, {:validate_transaction, tx})
+    TransactionValidator.validate(tx)
   end
 
   @doc """
@@ -286,10 +291,9 @@ defmodule Bastille.Features.Chain.Chain do
     end
   end
 
-  def handle_call({:validate_transaction, %Bastille.Features.Transaction.Transaction{} = tx}, _from, %__MODULE__{} = state) do
-    result = validate_transaction_against_state(tx, state)
-    {:reply, result, state}
-  end
+  # NOTE: validate_transaction no longer takes a GenServer.call — see the
+  # public API doc above. The pure validator lives in
+  # `Bastille.Features.Chain.TransactionValidator`.
 
   def handle_call({:get_transactions_for_address, address}, _from, state) do
     case Index.get_address_transactions(address) do
@@ -536,64 +540,13 @@ defmodule Bastille.Features.Chain.Chain do
     end
   end
 
-  defp validate_all_transactions(transactions, %__MODULE__{} = state) when is_list(transactions) do
+  # Block-level transaction validation reuses the pure validator so that the
+  # rules stay in one place (TransactionValidator).
+  defp validate_all_transactions(transactions, %__MODULE__{} = _state) when is_list(transactions) do
     Enum.all?(transactions, fn tx ->
-      case validate_transaction_against_state(tx, state) do
-        :ok -> true
-        _ -> false
-      end
+      TransactionValidator.validate(tx) == :ok
     end)
   end
-
-  defp validate_transaction_against_state(%Bastille.Features.Transaction.Transaction{signature_type: :coinbase}, _state), do: :ok
-  defp validate_transaction_against_state(%Bastille.Features.Transaction.Transaction{from: "1789Genesis"}, _state), do: :ok
-
-  defp validate_transaction_against_state(%Bastille.Features.Transaction.Transaction{} = tx, %__MODULE__{} = _state) do
-    %{from: from, amount: amount, fee: fee, nonce: tx_nonce} = tx
-
-    # Get balance breakdown (total, mature, immature) for transaction validation
-    # Fallback to total balance if CoinbaseMaturity is not available (e.g., in some tests)
-    mature_balance = case Process.whereis(CoinbaseMaturity) do
-      nil ->
-        # CoinbaseMaturity not started, use total balance from State
-        case State.get_balance(from) do
-          {:ok, balance} -> balance
-          {:error, _} -> 0
-        end
-      _pid ->
-        # CoinbaseMaturity is running, use mature balance
-        balance_breakdown = CoinbaseMaturity.get_balance_breakdown(from)
-        balance_breakdown.mature
-    end
-    
-    current_nonce = case State.get_nonce(from) do
-      {:ok, nonce} -> nonce
-      {:error, :not_found} -> 0
-    end
-    
-    total_cost = amount + fee
-
-    # Only allow spending mature balance (immature coinbases cannot be spent)
-    with :ok <- validate_balance(mature_balance, total_cost),
-         :ok <- validate_nonce(tx_nonce, current_nonce + 1) do
-      validate_address_format(from)
-    end
-  end
-
-  # Guard-based validation helpers
-  defp validate_balance(current, required) when current >= required, do: :ok
-  defp validate_balance(current, required),
-    do: {:error, {:insufficient_balance, required: required, available: current}}
-
-  defp validate_nonce(tx_nonce, expected) when tx_nonce == expected, do: :ok
-  defp validate_nonce(tx_nonce, expected),
-    do: {:error, {:invalid_nonce, expected: expected, got: tx_nonce}}
-
-  # Pattern matching for address validation - direct return
-  defp validate_address_format("1789Genesis"), do: :ok
-  defp validate_address_format("1789" <> _), do: :ok
-  defp validate_address_format("legacy_" <> _), do: :ok
-  defp validate_address_format(address), do: {:error, {:invalid_address_format, address: address}}
 
   # Apply transaction with pattern matching
   defp apply_transaction_to_state(%Bastille.Features.Transaction.Transaction{signature_type: :coinbase} = tx, state),
@@ -636,41 +589,21 @@ defmodule Bastille.Features.Chain.Chain do
     do: apply_transaction_to_state(tx, state)
 
   defp apply_coinbase_transaction(%Bastille.Features.Transaction.Transaction{} = tx, %__MODULE__{} = state) do
-    # Legacy path - used when block context is not available
-    # Get current balance from State storage
-    current_balance = case State.get_balance(tx.to) do
-      {:ok, balance} -> balance
-      {:error, :not_found} -> 0
-    end
-    
-    # Update balance in State storage (still add immediately for total balance)
+    current_balance =
+      case State.get_balance(tx.to) do
+        {:ok, balance} -> balance
+        {:error, :not_found} -> 0
+      end
+
     State.update_balance(tx.to, current_balance + tx.amount)
-    
-    # Use fallback block hash - should be rare
-    block_hash = state.head_hash || <<0::256>>  # Fallback for genesis
-    
-    # Register as immature coinbase reward
-    CoinbaseMaturity.add_coinbase_reward(block_hash, tx.amount, tx.to, state.height + 1)
-    
-    # Return state unchanged (no in-memory balance tracking)
     state
   end
 
-  defp apply_coinbase_transaction_with_block(%Bastille.Features.Transaction.Transaction{} = tx, block, %__MODULE__{} = state) do
-    # Get current balance from State storage
-    current_balance = case State.get_balance(tx.to) do
-      {:ok, balance} -> balance
-      {:error, :not_found} -> 0
-    end
-    
-    # Update balance in State storage (still add immediately for total balance)
-    State.update_balance(tx.to, current_balance + tx.amount)
-    
-    # Register as immature coinbase reward with actual block hash
-    CoinbaseMaturity.add_coinbase_reward(block.hash, tx.amount, tx.to, state.height + 1)
-    
-    # Return state unchanged (no in-memory balance tracking)
-    state
+  # Block-context variant is kept for symmetry with apply_transaction_to_state_with_block/3
+  # but currently behaves the same as the no-context variant. The block hash will be needed
+  # again when chain reorganization is implemented (to journal state changes per block).
+  defp apply_coinbase_transaction_with_block(%Bastille.Features.Transaction.Transaction{} = tx, _block, %__MODULE__{} = state) do
+    apply_coinbase_transaction(tx, state)
   end
 
   defp apply_block_to_state(%Bastille.Features.Block.Block{} = block, %__MODULE__{} = state) do
@@ -679,8 +612,9 @@ defmodule Bastille.Features.Chain.Chain do
       apply_transaction_to_state_with_block(tx, block, acc_state)
     end)
 
-    # Process coinbase maturity with new height
-    CoinbaseMaturity.process_maturity(new_state.height + 1)
+    # Note: maturity processing is performed by try_add_block_directly/2 AFTER
+    # the block is persisted, so that block_still_in_chain? can locate the
+    # just-mined block in Blocks storage.
 
     # Update blockchain state
     %{new_state |

@@ -43,11 +43,21 @@ defmodule Bastille.Features.Consensus.Engine do
   end
 
   @doc """
-  Mines a block using the current consensus mechanism.
+  Mines a block using the current consensus mechanism. The hot loop runs in
+  the calling process — NOT inside this GenServer — so that long mining
+  operations don't block validation or info queries. We read a snapshot of
+  the consensus module/state published to :persistent_term and call the
+  module's mine_block/2 directly. Falls back to a GenServer call when the
+  snapshot isn't available yet (e.g. very early in startup).
   """
   @spec mine_block(Block.t()) :: Behaviour.mining_result()
   def mine_block(%Bastille.Features.Block.Block{} = block) do
-    GenServer.call(__MODULE__, {:mine_block, block}, :infinity)
+    case :persistent_term.get({__MODULE__, :snapshot}, nil) do
+      {module, consensus_state} ->
+        module.mine_block(block, consensus_state)
+      _ ->
+        GenServer.call(__MODULE__, {:mine_block, block}, :infinity)
+    end
   end
 
   @doc """
@@ -59,11 +69,15 @@ defmodule Bastille.Features.Consensus.Engine do
   end
 
   @doc """
-  Gets the current difficulty.
+  Gets the current difficulty. Lock-free read via :persistent_term so RPC
+  endpoints stay responsive while the engine is busy mining a block.
   """
   @spec get_difficulty() :: non_neg_integer()
   def get_difficulty do
-    GenServer.call(__MODULE__, :get_difficulty, 5_000)
+    case :persistent_term.get({__MODULE__, :info}, nil) do
+      %{current_difficulty: d} -> d
+      _ -> GenServer.call(__MODULE__, :get_difficulty, 5_000)
+    end
   end
 
   @doc """
@@ -99,11 +113,15 @@ defmodule Bastille.Features.Consensus.Engine do
   end
 
   @doc """
-  Gets information about the current consensus mechanism.
+  Gets information about the current consensus mechanism. Lock-free via
+  :persistent_term — kept hot by the engine so mining doesn't make RPC stall.
   """
   @spec info() :: map()
   def info do
-    GenServer.call(__MODULE__, :info)
+    case :persistent_term.get({__MODULE__, :info}, nil) do
+      %{} = cached -> cached
+      _ -> GenServer.call(__MODULE__, :info)
+    end
   end
 
   @doc """
@@ -129,6 +147,7 @@ defmodule Bastille.Features.Consensus.Engine do
           config: consensus_config
         }
 
+        cache_info(state)
         Logger.info("Consensus engine started with #{inspect(consensus_module)}")
         {:ok, state}
 
@@ -170,12 +189,14 @@ defmodule Bastille.Features.Consensus.Engine do
   def handle_call({:adjust_difficulty, recent_blocks}, _from, %__MODULE__{} = state) do
     new_difficulty = state.consensus_module.adjust_difficulty(recent_blocks, state.consensus_state)
     new_state = %{state | consensus_state: maybe_set_difficulty(state, new_difficulty)}
+    cache_info(new_state)
     {:reply, new_difficulty, new_state}
   end
 
   def handle_call({:adjust_difficulty_fast, recent_block_times}, _from, %__MODULE__{} = state) do
     new_difficulty = state.consensus_module.adjust_difficulty(recent_block_times, state.consensus_state)
     new_state = %{state | consensus_state: maybe_set_difficulty(state, new_difficulty)}
+    cache_info(new_state)
     {:reply, new_difficulty, new_state}
   end
 
@@ -186,6 +207,7 @@ defmodule Bastille.Features.Consensus.Engine do
 
   def handle_call({:set_difficulty, new_difficulty}, _from, %__MODULE__{} = state) do
     new_state = %{state | consensus_state: maybe_set_difficulty(state, new_difficulty)}
+    cache_info(new_state)
     {:reply, :ok, new_state}
   end
 
@@ -208,6 +230,7 @@ defmodule Bastille.Features.Consensus.Engine do
           consensus_state: new_consensus_state,
           config: new_config
         }
+        cache_info(new_state)
         Logger.info("Successfully switched to #{inspect(new_module)}")
         {:reply, :ok, new_state}
 
@@ -235,5 +258,16 @@ defmodule Bastille.Features.Consensus.Engine do
     else
       state.consensus_state
     end
+  end
+
+  # Publishes the current consensus info AND a snapshot of {module, state} to
+  # :persistent_term so that read-only helpers (info/0, get_difficulty/0) and
+  # mine_block/1 can work without taking a GenServer.call on this process —
+  # important because long mining operations would otherwise hold the engine
+  # and make every other consensus query (validate_block, info, etc.) time out.
+  defp cache_info(%__MODULE__{} = state) do
+    info = state.consensus_module.info(state.consensus_state)
+    :persistent_term.put({__MODULE__, :info}, info)
+    :persistent_term.put({__MODULE__, :snapshot}, {state.consensus_module, state.consensus_state})
   end
 end

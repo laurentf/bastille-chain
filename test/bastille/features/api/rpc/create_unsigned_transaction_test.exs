@@ -1,211 +1,138 @@
 defmodule Bastille.Features.Api.RPC.CreateUnsignedTransactionTest do
-
   use ExUnit.Case, async: true
 
   alias Bastille.Features.Api.RPC.CreateUnsignedTransaction
+  alias Bastille.Features.Transaction.Transaction
 
   @moduletag :unit
 
-  describe "create_unsigned_transaction RPC method" do
-    test "handles missing parameters" do
-      result = CreateUnsignedTransaction.call(%{})
+  defp valid_from, do: "f789" <> String.duplicate("a", 40)
+  defp valid_to, do: "f789" <> String.duplicate("b", 40)
 
-      assert is_map(result)
-      assert %{"error" => %{"code" => -32_602, "message" => message}} = result
-      assert String.contains?(message, "Transaction creation failed")
+  describe "input validation" do
+    test "rejects missing parameters" do
+      assert %{"error" => %{"code" => -32_602}} = CreateUnsignedTransaction.call(%{})
     end
 
-    test "handles missing 'from' parameter" do
-      result = CreateUnsignedTransaction.call(%{
-        "to" => "1789abc",
-        "amount" => 1000
-      })
-
-      assert is_map(result)
-      assert result["error"]["code"] == -32_602
-      assert String.contains?(result["error"]["message"], "Transaction creation failed")
+    test "rejects missing 'from'" do
+      result = CreateUnsignedTransaction.call(%{"to" => valid_to(), "amount" => 1000})
+      assert match?(%{"error" => %{"code" => -32_602}}, result)
     end
 
-    test "handles missing 'to' parameter" do
-      result = CreateUnsignedTransaction.call(%{
-        "from" => "1789def",
-        "amount" => 1000
-      })
-
-      assert is_map(result)
-      assert result["error"]["code"] == -32_602
-      assert String.contains?(result["error"]["message"], "Transaction creation failed")
+    test "rejects missing 'to'" do
+      result = CreateUnsignedTransaction.call(%{"from" => valid_from(), "amount" => 1000})
+      assert match?(%{"error" => %{"code" => -32_602}}, result)
     end
 
-    test "handles missing 'amount' parameter" do
-      result = CreateUnsignedTransaction.call(%{
-        "from" => "1789abc",
-        "to" => "1789def"
-      })
-
-      assert is_map(result)
-      assert result["error"]["code"] == -32_602
-      assert String.contains?(result["error"]["message"], "Transaction creation failed")
+    test "rejects missing 'amount'" do
+      result = CreateUnsignedTransaction.call(%{"from" => valid_from(), "to" => valid_to()})
+      assert match?(%{"error" => %{"code" => -32_602}}, result)
     end
 
-    test "processes valid transaction parameters" do
-      prefix = Application.get_env(:bastille, :address_prefix, "1789")
-      from_address = prefix <> String.duplicate("a", 40)
-      to_address = prefix <> String.duplicate("b", 40)
-
-      params = %{
-        "from" => from_address,
-        "to" => to_address,
-        "amount" => 1000000
-      }
-
-      result = CreateUnsignedTransaction.call(params)
-
-      assert is_map(result)
-
-      case result do
-        %{"result" => %{"unsigned_transaction" => tx_b64, "transaction_hash" => hash}} ->
-          # Verify transaction format
-          assert is_binary(tx_b64)
-          assert String.length(tx_b64) > 0
-          assert is_binary(hash)
-          assert String.length(hash) > 0
-
-        %{"error" => %{"code" => -32_602, "message" => message}} ->
-          # Error acceptable when blockchain service unavailable
-          assert is_binary(message)
-
-        _ ->
-          flunk("Unexpected response format: #{inspect(result)}")
-      end
-    end
-
-    test "handles invalid address formats" do
-      invalid_addresses = [
+    test "rejects invalid address formats" do
+      invalids = [
         "invalid_address",
         "1234short",
         "wrongprefix" <> String.duplicate("a", 40)
       ]
 
-      for invalid_addr <- invalid_addresses do
+      for bad <- invalids do
         result = CreateUnsignedTransaction.call(%{
-          "from" => invalid_addr,
-          "to" => "1789" <> String.duplicate("b", 40),
+          "from" => bad,
+          "to" => valid_to(),
           "amount" => 1000
         })
 
-        assert is_map(result)
-        # Should either return error or handle gracefully
-        assert Map.has_key?(result, "error") or Map.has_key?(result, "result")
+        assert match?(%{"error" => _}, result), "Expected error for #{bad}"
       end
     end
 
-    test "handles invalid amount values" do
-      prefix = Application.get_env(:bastille, :address_prefix, "1789")
-      from_address = prefix <> String.duplicate("a", 40)
-      to_address = prefix <> String.duplicate("b", 40)
-
-      invalid_amounts = [-100, 0, "not_a_number", nil]
-
-      for amount <- invalid_amounts do
+    test "rejects non-positive amounts" do
+      for bad <- [-100, 0, "not_a_number", nil] do
         result = CreateUnsignedTransaction.call(%{
-          "from" => from_address,
-          "to" => to_address,
-          "amount" => amount
+          "from" => valid_from(),
+          "to" => valid_to(),
+          "amount" => bad
         })
 
-        assert is_map(result)
-        # Should handle invalid amounts appropriately
+        assert match?(%{"error" => _}, result), "Expected error for amount=#{inspect(bad)}"
       end
     end
   end
 
-  describe "parameter validation" do
-    test "validates required parameters presence" do
-      required_params = ["from", "to", "amount"]
+  describe "successful response" do
+    test "returns a JSON-safe map for the unsigned transaction (no base64+ETF)" do
+      result =
+        CreateUnsignedTransaction.call(%{
+          "from" => valid_from(),
+          "to" => valid_to(),
+          "amount" => 1_000_000
+        })
 
-      # Test each missing parameter combination
-      for missing_param <- required_params do
-        params = %{
-          "from" => "1789abc",
-          "to" => "1789def",
-          "amount" => 1000
-        }
-        |> Map.delete(missing_param)
+      assert %{"unsigned_transaction" => tx_map, "transaction_hash" => hash_hex} = result
 
-        result = CreateUnsignedTransaction.call(params)
-        assert result["error"]["code"] == -32_602
-      assert String.contains?(result["error"]["message"], "Transaction creation failed")
-      end
+      # tx_map is a plain map, NOT a base64 string
+      assert is_map(tx_map)
+      refute is_binary(tx_map)
+
+      # All expected fields present
+      assert tx_map["from"] == valid_from()
+      assert tx_map["to"] == valid_to()
+      assert tx_map["amount"] == 1_000_000
+      assert is_integer(tx_map["fee"]) and tx_map["fee"] > 0
+      assert is_integer(tx_map["nonce"]) and tx_map["nonce"] >= 0
+      assert is_integer(tx_map["timestamp"])
+      assert tx_map["signature_type"] == "post_quantum_2_of_3"
+      assert is_binary(tx_map["hash"]) and String.length(tx_map["hash"]) == 64
+
+      # Top-level hash matches the inner one
+      assert hash_hex == tx_map["hash"]
+
+      # No signature on an unsigned tx
+      refute Map.has_key?(tx_map, "signature")
     end
 
-    test "handles additional optional parameters" do
-      prefix = Application.get_env(:bastille, :address_prefix, "1789")
+    test "the unsigned map round-trips through Transaction.from_json_map" do
+      %{"unsigned_transaction" => tx_map} =
+        CreateUnsignedTransaction.call(%{
+          "from" => valid_from(),
+          "to" => valid_to(),
+          "amount" => 5_000_000
+        })
 
-      result = CreateUnsignedTransaction.call(%{
-        "from" => prefix <> String.duplicate("a", 40),
-        "to" => prefix <> String.duplicate("b", 40),
-        "amount" => 1000000,
-        "fee" => 1000,
-        "data" => "optional message",
-        "unused" => "ignored"
-      })
-
-      assert is_map(result)
-      # Should process required params and optionally use fee/data
-    end
-  end
-
-  describe "response format" do
-    test "successful response contains unsigned_transaction" do
-      prefix = Application.get_env(:bastille, :address_prefix, "1789")
-
-      result = CreateUnsignedTransaction.call(%{
-        "from" => prefix <> String.duplicate("c", 40),
-        "to" => prefix <> String.duplicate("d", 40),
-        "amount" => 5000000
-      })
-
-      case result do
-        %{"result" => %{"unsigned_transaction" => tx_b64, "transaction_hash" => hash}} ->
-          assert is_binary(tx_b64)
-          assert is_binary(hash)
-
-        %{"error" => %{"code" => _, "message" => _}} ->
-          # Error response is acceptable
-          assert true
-      end
+      assert {:ok, %Transaction{} = tx} = Transaction.from_json_map(tx_map)
+      assert tx.from == valid_from()
+      assert tx.to == valid_to()
+      assert tx.amount == 5_000_000
+      assert tx.signature == nil
     end
 
-    test "transaction includes nonce when successful" do
-      prefix = Application.get_env(:bastille, :address_prefix, "1789")
+    test "accepts checksummed mixed-case addresses (and canonicalizes them)" do
+      checksummed_from = Bastille.Shared.Address.with_checksum(valid_from())
 
-      result = CreateUnsignedTransaction.call(%{
-        "from" => prefix <> String.duplicate("e", 40),
-        "to" => prefix <> String.duplicate("f", 40),
-        "amount" => 2000000
-      })
+      %{"unsigned_transaction" => tx_map} =
+        CreateUnsignedTransaction.call(%{
+          "from" => checksummed_from,
+          "to" => valid_to(),
+          "amount" => 1_000_000
+        })
 
-      case result do
-        %{"result" => %{"unsigned_transaction" => tx_b64, "transaction_hash" => hash}} ->
-          # Transaction should be base64 encoded
-          assert is_binary(tx_b64)
-          assert is_binary(hash)
-
-        %{"error" => %{"code" => _, "message" => _}} ->
-          # Error response is acceptable
-          assert true
-      end
+      # Stored canonical (lowercase) on chain regardless of input case
+      assert tx_map["from"] == valid_from()
     end
 
-    test "always returns a map" do
-      result = CreateUnsignedTransaction.call(%{
-        "from" => "any",
-        "to" => "any",
-        "amount" => 1
-      })
+    test "ignores client-supplied fee and uses size-based auto fee" do
+      %{"unsigned_transaction" => tx_map} =
+        CreateUnsignedTransaction.call(%{
+          "from" => valid_from(),
+          "to" => valid_to(),
+          "amount" => 1_000_000,
+          "fee" => 1
+        })
 
-      assert is_map(result)
+      # Even though the client passed fee=1, the server recomputes from
+      # tx size — preventing under-fee mempool spam.
+      assert tx_map["fee"] > 1
     end
   end
 end

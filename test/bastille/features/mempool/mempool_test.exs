@@ -7,38 +7,12 @@ defmodule Bastille.Features.Transaction.MempoolTest do
   @moduletag :unit
 
   setup do
-    # Stop any existing mempool and start fresh with test configuration
-    case Process.whereis(Mempool) do
-      nil -> :ok  # Not running
-      _pid -> 
-        try do
-          GenServer.stop(Mempool, :normal, 1000)
-        catch
-          :exit, _ -> :ok  # Process already dead
-        end
-    end
-    
-    # Small delay to ensure cleanup
-    Process.sleep(10)
-    
-    case Mempool.start_link(skip_signature_validation: true, skip_chain_validation: true) do
-      {:ok, _pid} -> :ok
-      {:error, {:already_started, _pid}} -> :ok
-    end
-    
-    on_exit(fn ->
-      # Safe cleanup: only stop if process is alive
-      case Process.whereis(Mempool) do
-        nil -> :ok  # Already stopped
-        _pid -> 
-          try do
-            GenServer.stop(Mempool, :normal, 1000)
-          catch
-            :exit, _ -> :ok  # Process already dead, that's fine
-          end
-      end
-    end)
-    
+    # The supervised Mempool is started by the OTP supervisor with the
+    # `mempool_opts: [skip_signature_validation: true, skip_chain_validation:
+    # true]` from config/test.exs — so just clear between tests. The two
+    # tests that need custom min_fee / max_size start a *sandboxed* named
+    # mempool instance and never touch the global one.
+    Mempool.clear()
     :ok
   end
 
@@ -108,21 +82,32 @@ defmodule Bastille.Features.Transaction.MempoolTest do
 
   describe "mempool transaction validation" do
     test "rejects transactions with insufficient fee" do
-      # Create mempool with higher minimum fee
-      GenServer.stop(Mempool)
-      {:ok, _pid} = Mempool.start_link(min_fee: 5000000, skip_signature_validation: true, skip_chain_validation: true)
-      
-      tx = create_test_transaction([
-        from: "f789" <> String.duplicate("d", 40),
-        to: "f789" <> String.duplicate("f", 40),
-        nonce: 500
-      ])
-      
-      # Transaction fee should be less than 5000000
-      assert tx.fee < 5000000
-      result = Mempool.add_transaction(tx)
-      assert match?({:error, :insufficient_fee}, result)
-      assert Mempool.size() == 0
+      # Use a sandboxed mempool with custom min_fee. Don't touch the global
+      # supervised Mempool — that burns supervisor restart budget and
+      # flakes the rest of the suite.
+      name = :"local_mempool_#{System.unique_integer([:positive])}"
+
+      {:ok, _pid} =
+        Mempool.start_link(
+          name: name,
+          min_fee: 5_000_000,
+          skip_signature_validation: true,
+          skip_chain_validation: true
+        )
+
+      on_exit(fn -> if Process.whereis(name), do: GenServer.stop(name, :normal, 1000) end)
+
+      tx =
+        create_test_transaction(
+          from: "f789" <> String.duplicate("d", 40),
+          to: "f789" <> String.duplicate("f", 40),
+          nonce: 500
+        )
+
+      assert tx.fee < 5_000_000
+
+      assert match?({:error, :insufficient_fee}, GenServer.call(name, {:add_transaction, tx}))
+      assert GenServer.call(name, :size) == 0
     end
 
     test "accepts transactions with sufficient fee" do
@@ -157,22 +142,30 @@ defmodule Bastille.Features.Transaction.MempoolTest do
 
   describe "mempool capacity and limits" do
     test "respects maximum mempool size" do
-      # Create mempool with small max size
-      GenServer.stop(Mempool)
-      {:ok, _pid} = Mempool.start_link(max_size: 2, skip_signature_validation: true, skip_chain_validation: true)
-      
-      tx1 = create_test_transaction([from: "f789" <> String.duplicate("1", 40), to: "f789" <> String.duplicate("2", 40), nonce: 1])
-      tx2 = create_test_transaction([from: "f789" <> String.duplicate("3", 40), to: "f789" <> String.duplicate("4", 40), nonce: 2])
-      tx3 = create_test_transaction([from: "f789" <> String.duplicate("5", 40), to: "f789" <> String.duplicate("6", 40), nonce: 3])
-      
-      assert Mempool.add_transaction(tx1) == :ok
-      assert Mempool.add_transaction(tx2) == :ok
-      assert Mempool.size() == 2
-      
-      # Third transaction should be rejected
-      result = Mempool.add_transaction(tx3)
-      assert match?({:error, :mempool_full}, result)
-      assert Mempool.size() == 2
+      # Sandboxed mempool with small capacity — see note in the
+      # insufficient-fee test above for why we don't cycle the global one.
+      name = :"local_mempool_#{System.unique_integer([:positive])}"
+
+      {:ok, _pid} =
+        Mempool.start_link(
+          name: name,
+          max_size: 2,
+          skip_signature_validation: true,
+          skip_chain_validation: true
+        )
+
+      on_exit(fn -> if Process.whereis(name), do: GenServer.stop(name, :normal, 1000) end)
+
+      tx1 = create_test_transaction(from: "f789" <> String.duplicate("1", 40), to: "f789" <> String.duplicate("2", 40), nonce: 1)
+      tx2 = create_test_transaction(from: "f789" <> String.duplicate("3", 40), to: "f789" <> String.duplicate("4", 40), nonce: 2)
+      tx3 = create_test_transaction(from: "f789" <> String.duplicate("5", 40), to: "f789" <> String.duplicate("6", 40), nonce: 3)
+
+      assert GenServer.call(name, {:add_transaction, tx1}) == :ok
+      assert GenServer.call(name, {:add_transaction, tx2}) == :ok
+      assert GenServer.call(name, :size) == 2
+
+      assert match?({:error, :mempool_full}, GenServer.call(name, {:add_transaction, tx3}))
+      assert GenServer.call(name, :size) == 2
     end
 
     test "can retrieve limited number of transactions" do

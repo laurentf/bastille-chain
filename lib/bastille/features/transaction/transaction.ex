@@ -9,7 +9,9 @@ defmodule Bastille.Features.Transaction.Transaction do
   - 14-decimal precision with "juillet" smallest unit
   """
 
-  alias Bastille.Shared.{Crypto, CryptoUtils}
+  require Logger
+
+  alias Bastille.Shared.{Address, Crypto, CryptoUtils}
   alias Bastille.Features.Tokenomics.Token
   alias Bastille.Infrastructure.Storage.CubDB.State
 
@@ -42,12 +44,19 @@ defmodule Bastille.Features.Transaction.Transaction do
 
   @doc """
   Creates a new transaction with post-quantum addresses.
+
+  `from` and `to` are canonicalized to lowercase before being stored on the
+  struct so the tx hash and the State storage key are stable regardless of
+  whether the caller supplied the checksummed display form or the
+  canonical form. Callers should still validate the input form via
+  `Bastille.Shared.Address.valid?/1` BEFORE calling `new/1` — this is the
+  caller's responsibility (typically the RPC handler).
   """
   @spec new(keyword()) :: t()
   def new(opts) do
     base_tx = %__MODULE__{
-      from: Keyword.fetch!(opts, :from),
-      to: Keyword.fetch!(opts, :to),
+      from: opts |> Keyword.fetch!(:from) |> Address.canonical(),
+      to: opts |> Keyword.fetch!(:to) |> Address.canonical(),
       amount: Keyword.fetch!(opts, :amount),
       fee: 0, # placeholder, will set below
       nonce: Keyword.fetch!(opts, :nonce),
@@ -223,15 +232,26 @@ defmodule Bastille.Features.Transaction.Transaction do
   def verify_signature(%__MODULE__{signature_type: :post_quantum_2_of_3} = tx) do
     message = serialize_for_signing(tx)
 
-    # Get public keys for the from address
+    Logger.debug("🔍 Verifying tx signature #{encode_hash(tx.hash)}")
+    Logger.debug("   └─ chain_id: #{chain_id_bytes()}")
+    Logger.debug("   └─ fee: #{tx.fee} juillet, data_size: #{byte_size(tx.data || <<>>)} bytes")
+
     case State.get_public_keys(tx.from) do
       {:ok, public_keys} ->
-        Crypto.verify(message, tx.signature, public_keys)
+        case Crypto.verify(message, tx.signature, public_keys) do
+          true ->
+            true
+          false ->
+            Logger.warning("⚠️ Tx signature invalid for #{encode_hash(tx.hash)} (from #{tx.from})")
+            false
+        end
+
       {:error, :not_found} ->
-        # If no public keys stored, check if this is a fresh address
-        # and try to derive from the transaction signature (not implemented yet)
+        Logger.warning("⚠️ Tx signature unverifiable: no public keys stored for #{tx.from}")
         false
-      {:error, _} ->
+
+      {:error, reason} ->
+        Logger.warning("⚠️ Tx signature unverifiable: pubkey lookup failed (#{inspect(reason)}) for #{tx.from}")
         false
     end
   end
@@ -240,6 +260,9 @@ defmodule Bastille.Features.Transaction.Transaction do
   # All transactions must use post-quantum signatures
 
   def verify_signature(_), do: false
+
+  defp encode_hash(hash) when is_binary(hash), do: hash |> Base.encode16(case: :lower) |> String.slice(0, 16)
+  defp encode_hash(_), do: "<no-hash>"
 
   @doc """
   Converts transaction to display format with human-readable amounts.
@@ -270,7 +293,94 @@ defmodule Bastille.Features.Transaction.Transaction do
   end
 
   @doc """
+  Convert a transaction to a JSON-safe plain map.
+
+  This is the canonical wire format for the RPC layer — JSON over HTTP.
+  Binary fields (hash, signature components) are hex-encoded. Atoms are
+  converted to strings. Use this instead of `to_binary/1` whenever a
+  transaction crosses the RPC boundary so consumers never need to call
+  `:erlang.binary_to_term/1` on untrusted bytes.
+  """
+  @spec to_json_map(t()) :: map()
+  def to_json_map(%__MODULE__{} = tx) do
+    base = %{
+      "from" => tx.from,
+      "to" => tx.to,
+      "amount" => tx.amount,
+      "fee" => tx.fee,
+      "nonce" => tx.nonce,
+      "timestamp" => tx.timestamp,
+      "data" => tx.data || "",
+      "signature_type" => Atom.to_string(tx.signature_type),
+      "hash" => encode_binary(tx.hash)
+    }
+
+    case tx.signature do
+      nil ->
+        base
+
+      %{dilithium: d, falcon: f, sphincs: s} ->
+        Map.put(base, "signature", %{
+          "dilithium" => encode_binary(d),
+          "falcon" => encode_binary(f),
+          "sphincs" => encode_binary(s)
+        })
+
+      %{type: :coinbase} ->
+        # Coinbase txs never cross the RPC boundary, but expose a tag so
+        # accidental serialization doesn't leak struct internals.
+        Map.put(base, "signature", %{"type" => "coinbase"})
+    end
+  end
+
+  @doc """
+  Parse a transaction from a JSON-derived plain map.
+
+  Strict, fail-closed validation. Returns `{:ok, %Transaction{}}` on
+  success or `{:error, reason}` otherwise. This is the entry point for
+  every RPC handler that receives an unsigned or signed transaction —
+  NEVER call `:erlang.binary_to_term/1` on RPC input. ETF can inject
+  arbitrary atoms (exhausting the atom table) and other host terms.
+
+  Only `signature_type: "post_quantum_2_of_3"` is accepted from the wire.
+  Coinbase transactions are constructed internally and never flow through
+  this function.
+  """
+  @spec from_json_map(map()) :: {:ok, t()} | {:error, term()}
+  def from_json_map(%{} = m) do
+    with {:ok, from} <- fetch_address(m, "from"),
+         {:ok, to} <- fetch_address(m, "to"),
+         {:ok, amount} <- fetch_non_neg_int(m, "amount"),
+         {:ok, fee} <- fetch_non_neg_int(m, "fee"),
+         {:ok, nonce} <- fetch_non_neg_int(m, "nonce"),
+         {:ok, timestamp} <- fetch_int(m, "timestamp"),
+         {:ok, data} <- fetch_optional_string(m, "data"),
+         {:ok, sig_type} <- fetch_signature_type(m),
+         {:ok, hash} <- fetch_hex_bytes(m, "hash", 32),
+         {:ok, signature} <- fetch_signature(m, sig_type) do
+      {:ok,
+       %__MODULE__{
+         from: from,
+         to: to,
+         amount: amount,
+         fee: fee,
+         nonce: nonce,
+         timestamp: timestamp,
+         data: data,
+         signature_type: sig_type,
+         hash: hash,
+         signature: signature
+       }}
+    end
+  end
+
+  def from_json_map(_), do: {:error, :invalid_payload}
+
+  @doc """
   Serializes transaction to binary format.
+
+  ⚠️ Internal storage only. Use `to_json_map/1` for the RPC wire and
+  never accept `:erlang.term_to_binary/1` output from untrusted sources.
   """
   @spec to_binary(t()) :: binary()
   def to_binary(%__MODULE__{} = tx) do
@@ -298,17 +408,49 @@ defmodule Bastille.Features.Transaction.Transaction do
 
   @doc """
   Serialize transaction for signing.
-  Creates a deterministic message from transaction fields.
+
+  Deterministic message bound to the configured network so that:
+  - any modification of `fee` or `data` invalidates the signature (otherwise
+    a MITM could rewrite either field while keeping the signature valid)
+  - a signature minted on testnet cannot be replayed on mainnet
+
+  Layout (fixed offsets so verification side reconstructs it identically):
+      chain_id_size::32
+      chain_id::binary
+      from::binary       (44 bytes — fixed-length prefix + 40 hex)
+      to::binary         (44 bytes)
+      amount::64
+      fee::64
+      nonce::64
+      timestamp::64
+      data_size::32
+      data::binary
   """
   def serialize_for_signing(%__MODULE__{} = tx) do
-    # Create deterministic message for signing
+    chain_id = chain_id_bytes()
+    data = tx.data || <<>>
+
     <<
+      byte_size(chain_id)::32,
+      chain_id::binary,
       tx.from::binary,
       tx.to::binary,
       tx.amount::64,
+      tx.fee::64,
       tx.nonce::64,
-      tx.timestamp::64
+      tx.timestamp::64,
+      byte_size(data)::32,
+      data::binary
     >>
+  end
+
+  # Network identifier embedded in the signed message. Reads from the same
+  # config the P2P layer uses (`Bastille.Features.P2P.Messaging.Messages.get_network_magic/1`).
+  # Atom is converted to a binary so it travels deterministically.
+  defp chain_id_bytes do
+    :bastille
+    |> Application.get_env(:network, :testnet)
+    |> Atom.to_string()
   end
 
   # Private functions
@@ -329,13 +471,10 @@ defmodule Bastille.Features.Transaction.Transaction do
   end
 
   defp valid_address?(address) when is_binary(address) do
-    prefix = Application.get_env(:bastille, :address_prefix, "1789")
-
     cond do
-      address == prefix <> "Genesis" -> true  # Special genesis address
+      address == "1789Genesis" -> true  # Synthetic coinbase sender label
       String.starts_with?(address, "legacy_") -> true  # Legacy format
-      String.starts_with?(address, prefix) -> Crypto.valid_address?(address)
-      true -> false
+      true -> Address.valid?(address)  # Standard format + EIP-55-like checksum
     end
   end
   defp valid_address?(_), do: false
@@ -353,4 +492,92 @@ defmodule Bastille.Features.Transaction.Transaction do
     atom |> Atom.to_string() |> :binary.copy()
   end
   defp atom_to_binary(other), do: to_string(other)
+
+  # === JSON-map helpers (safe RPC parsing) ===
+
+  defp encode_binary(nil), do: ""
+  defp encode_binary(b) when is_binary(b), do: Base.encode16(b, case: :lower)
+
+  defp fetch_address(m, key) do
+    case Map.get(m, key) do
+      v when is_binary(v) and v != "" ->
+        if Address.valid?(v) do
+          {:ok, Address.canonical(v)}
+        else
+          {:error, {:invalid_address, key}}
+        end
+
+      _ ->
+        {:error, {:missing_field, key}}
+    end
+  end
+
+  defp fetch_int(m, key) do
+    case Map.get(m, key) do
+      v when is_integer(v) -> {:ok, v}
+      _ -> {:error, {:missing_or_non_integer, key}}
+    end
+  end
+
+  defp fetch_non_neg_int(m, key) do
+    case fetch_int(m, key) do
+      {:ok, v} when v >= 0 -> {:ok, v}
+      {:ok, _} -> {:error, {:negative_value, key}}
+      err -> err
+    end
+  end
+
+  defp fetch_optional_string(m, key) do
+    case Map.get(m, key, "") do
+      v when is_binary(v) -> {:ok, v}
+      _ -> {:error, {:invalid_string, key}}
+    end
+  end
+
+  defp fetch_signature_type(m) do
+    case Map.get(m, "signature_type") do
+      "post_quantum_2_of_3" -> {:ok, :post_quantum_2_of_3}
+      other -> {:error, {:unsupported_signature_type, other}}
+    end
+  end
+
+  defp fetch_hex_bytes(m, key, expected_size) do
+    with v when is_binary(v) <- Map.get(m, key),
+         {:ok, bytes} <- Base.decode16(v, case: :mixed),
+         true <- byte_size(bytes) == expected_size do
+      {:ok, bytes}
+    else
+      nil -> {:error, {:missing_field, key}}
+      false -> {:error, {:wrong_byte_size, key, expected_size}}
+      :error -> {:error, {:invalid_hex, key}}
+      _ -> {:error, {:invalid_field, key}}
+    end
+  end
+
+  # Signature is optional on unsigned transactions; required on signed ones.
+  # The caller (RPC layer) decides whether `nil` is acceptable for its flow.
+  defp fetch_signature(m, :post_quantum_2_of_3) do
+    case Map.get(m, "signature") do
+      nil ->
+        {:ok, nil}
+
+      %{"dilithium" => d, "falcon" => f, "sphincs" => s}
+      when is_binary(d) and is_binary(f) and is_binary(s) ->
+        with {:ok, dilithium} <- decode_hex(d),
+             {:ok, falcon} <- decode_hex(f),
+             {:ok, sphincs} <- decode_hex(s) do
+          {:ok, %{dilithium: dilithium, falcon: falcon, sphincs: sphincs}}
+        end
+
+      _ ->
+        {:error, :invalid_signature_shape}
+    end
+  end
+
+  defp decode_hex(v) when is_binary(v) do
+    case Base.decode16(v, case: :mixed) do
+      {:ok, bytes} -> {:ok, bytes}
+      :error -> {:error, :invalid_hex}
+    end
+  end
 end

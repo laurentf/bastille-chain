@@ -31,7 +31,7 @@ defmodule Bastille.Shared.Constants do
   @initial_supply_juillet @initial_supply_bast * @juillet_per_bast
 
   # ===== GENESIS ECONOMICS =====
-  @genesis_address_prefix "1789"  # Genesis goes to "1789Revolution"
+  @genesis_address_prefix "1789"  # Production/mainnet address prefix
   @genesis_timestamp 1_752_422_400  # July 14, 2025 at midnight UTC
 
   # ===== FEE ECONOMICS =====
