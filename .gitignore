@@ -91,5 +91,3 @@ Dockerfile.dev
 data/
 test_data/
 *.cubdb
-ARCHITECTURE_REVIEW.md
-IMPROVEMENT_PLAN.md
