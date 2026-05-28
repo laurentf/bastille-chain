@@ -610,7 +610,7 @@ returns `{address, balance, nonce}`. Tx validation against state uses
 
 **Strengths**:
 - Atomic validation with `with` pipeline.
-- Clean validation/application separation (cf. cursorrules).
+- Clean validation/application separation (cf. CONVENTIONS.md).
 - Coinbase and "1789Genesis" cleanly short-circuited.
 
 **Weaknesses**:

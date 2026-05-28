@@ -8,6 +8,9 @@ deps/
 priv/*.so
 priv/*.dll
 priv/*.dylib
+priv/native/*.so
+priv/native/*.dll
+priv/native/*.dylib
 
 # Mix artifacts
 mix.lock

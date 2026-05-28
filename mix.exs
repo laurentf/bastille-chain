@@ -56,8 +56,7 @@ defmodule Bastille.MixProject do
   defp crypto_deps do
     # Post-quantum cryptography avec Rustler - MODERNE ET FIABLE !
     [
-      {:rustler, "~> 0.34"},        # Rustler pour NIFs Rust
-      {:keccakf1600, "~> 3.0.0"}    # Keccak hash
+      {:rustler, "~> 0.34"}
     ]
   end
 

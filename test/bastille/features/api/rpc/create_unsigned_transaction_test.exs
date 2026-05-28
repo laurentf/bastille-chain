@@ -37,11 +37,12 @@ defmodule Bastille.Features.Api.RPC.CreateUnsignedTransactionTest do
       ]
 
       for bad <- invalids do
-        result = CreateUnsignedTransaction.call(%{
-          "from" => bad,
-          "to" => valid_to(),
-          "amount" => 1000
-        })
+        result =
+          CreateUnsignedTransaction.call(%{
+            "from" => bad,
+            "to" => valid_to(),
+            "amount" => 1000
+          })
 
         assert match?(%{"error" => _}, result), "Expected error for #{bad}"
       end
@@ -49,11 +50,12 @@ defmodule Bastille.Features.Api.RPC.CreateUnsignedTransactionTest do
 
     test "rejects non-positive amounts" do
       for bad <- [-100, 0, "not_a_number", nil] do
-        result = CreateUnsignedTransaction.call(%{
-          "from" => valid_from(),
-          "to" => valid_to(),
-          "amount" => bad
-        })
+        result =
+          CreateUnsignedTransaction.call(%{
+            "from" => valid_from(),
+            "to" => valid_to(),
+            "amount" => bad
+          })
 
         assert match?(%{"error" => _}, result), "Expected error for amount=#{inspect(bad)}"
       end

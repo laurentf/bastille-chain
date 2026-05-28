@@ -13,27 +13,35 @@ defmodule Bastille.Features.Transaction.Mempool do
   alias Bastille.Features.Transaction.Transaction
 
   # Default configuration (Bitcoin-inspired values)
-  @default_max_size 4000        # Max transactions in memory
-  @default_min_fee 1000         # Minimum fee in juillet units
-  @cleanup_interval_ms 300_000  # Cleanup every 5 minutes
+  # Max transactions in memory
+  @default_max_size 4000
+  # Minimum fee in juillet units
+  @default_min_fee 1000
+  # Cleanup every 5 minutes
+  @cleanup_interval_ms 300_000
 
   defstruct [
-    transactions: :gb_trees.empty(),  # Priority-ordered tree
-    tx_by_hash: %{},                  # Fast index by hash
+    # Priority-ordered tree
+    transactions: :gb_trees.empty(),
+    # Fast index by hash
+    tx_by_hash: %{},
     max_size: @default_max_size,
     min_fee: @default_min_fee,
-    skip_signature_validation: false, # TEST ONLY: bypass signature validation
-    skip_chain_validation: false      # TEST ONLY: bypass chain validation
+    # TEST ONLY: bypass signature validation
+    skip_signature_validation: false,
+    # TEST ONLY: bypass chain validation
+    skip_chain_validation: false
   ]
 
   @type t :: %__MODULE__{
-    transactions: :gb_trees.tree(priority :: {non_neg_integer(), integer(), binary()}, Transaction.t()),
-    tx_by_hash: %{binary() => Transaction.t()},
-    max_size: pos_integer(),
-    min_fee: non_neg_integer(),
-    skip_signature_validation: boolean(),
-    skip_chain_validation: boolean()
-  }
+          transactions:
+            :gb_trees.tree(priority :: {non_neg_integer(), integer(), binary()}, Transaction.t()),
+          tx_by_hash: %{binary() => Transaction.t()},
+          max_size: pos_integer(),
+          min_fee: non_neg_integer(),
+          skip_signature_validation: boolean(),
+          skip_chain_validation: boolean()
+        }
 
   # Client API
 
@@ -174,10 +182,7 @@ defmodule Bastille.Features.Transaction.Mempool do
 
   @impl true
   def handle_call(:clear, _from, %__MODULE__{} = state) do
-    new_state = %{state |
-      transactions: :gb_trees.empty(),
-      tx_by_hash: %{}
-    }
+    new_state = %{state | transactions: :gb_trees.empty(), tx_by_hash: %{}}
     {:reply, :ok, new_state}
   end
 
@@ -207,13 +212,16 @@ defmodule Bastille.Features.Transaction.Mempool do
   end
 
   # TEST ONLY: Validation that bypasses signatures when skip_signature_validation is true
-  defp validate_transaction_structure(%Transaction{} = tx, %__MODULE__{skip_signature_validation: true}) do
+  defp validate_transaction_structure(%Transaction{} = tx, %__MODULE__{
+         skip_signature_validation: true
+       }) do
     if Transaction.valid_for_testing?(tx) do
       :ok
     else
       {:error, :invalid_structure}
     end
   end
+
   defp validate_transaction_structure(%Transaction{} = tx, _state) do
     validate_transaction_structure(tx)
   end
@@ -241,6 +249,7 @@ defmodule Bastille.Features.Transaction.Mempool do
   defp validate_transaction_against_chain(%Transaction{}, %__MODULE__{skip_chain_validation: true}) do
     :ok
   end
+
   defp validate_transaction_against_chain(%Transaction{} = tx, _state) do
     TransactionValidator.validate(tx)
   end
@@ -263,10 +272,7 @@ defmodule Bastille.Features.Transaction.Mempool do
     new_transactions = :gb_trees.enter(priority, tx, state.transactions)
     new_tx_by_hash = Map.put(state.tx_by_hash, tx.hash, tx)
 
-    %{state |
-      transactions: new_transactions,
-      tx_by_hash: new_tx_by_hash
-    }
+    %{state | transactions: new_transactions, tx_by_hash: new_tx_by_hash}
   end
 
   defp calculate_priority(%Transaction{fee: fee, timestamp: timestamp, hash: hash}) do
@@ -287,23 +293,21 @@ defmodule Bastille.Features.Transaction.Mempool do
         :gb_trees.enter(priority, tx, acc)
       end)
 
-    %{state |
-      transactions: new_transactions,
-      tx_by_hash: new_tx_by_hash
-    }
+    %{state | transactions: new_transactions, tx_by_hash: new_tx_by_hash}
   end
 
   defp cleanup_stale_transactions(%__MODULE__{} = state) do
     # Remove too-old transactions (> 24h)
     now = System.system_time(:second)
-    cutoff = now - 86_400  # 24 hours
+    # 24 hours
+    cutoff = now - 86_400
 
     stale_hashes =
       state.tx_by_hash
       |> Enum.filter(fn {_hash, tx} -> tx.timestamp < cutoff end)
       |> Enum.map(fn {hash, _tx} -> hash end)
 
-    if length(stale_hashes) > 0 do
+    if stale_hashes != [] do
       Logger.info("🧹 Cleaning #{length(stale_hashes)} stale transactions from mempool")
       remove_transactions_from_state(stale_hashes, state)
     else

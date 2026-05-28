@@ -20,8 +20,10 @@ config :bastille,
     listen_port: 8003,
     max_peers: 10,
     bootstrap_peers: [
-      {"127.0.0.1", 8001},  # Connect to node1
-      {"127.0.0.1", 8002}   # Connect to node2
+      # Connect to node1
+      {"127.0.0.1", 8001},
+      # Connect to node2
+      {"127.0.0.1", 8002}
     ]
   ],
 

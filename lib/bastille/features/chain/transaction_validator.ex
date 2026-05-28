@@ -61,10 +61,12 @@ defmodule Bastille.Features.Chain.TransactionValidator do
   end
 
   defp validate_balance(current, required) when current >= required, do: :ok
+
   defp validate_balance(current, required),
     do: {:error, {:insufficient_balance, required: required, available: current}}
 
   defp validate_nonce(tx_nonce, expected) when tx_nonce == expected, do: :ok
+
   defp validate_nonce(tx_nonce, expected),
     do: {:error, {:invalid_nonce, expected: expected, got: tx_nonce}}
 
@@ -72,11 +74,13 @@ defmodule Bastille.Features.Chain.TransactionValidator do
   # crossing the Chain GenServer boundary.
   defp validate_address_format("1789Genesis"), do: :ok
   defp validate_address_format("legacy_" <> _), do: :ok
+
   defp validate_address_format(address) when is_binary(address) do
     case Address.valid?(address) do
       true -> :ok
       false -> {:error, {:invalid_address_format, address: address}}
     end
   end
+
   defp validate_address_format(address), do: {:error, {:invalid_address_format, address: address}}
 end

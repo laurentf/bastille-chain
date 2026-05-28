@@ -1,5 +1,4 @@
 defmodule Bastille.Features.Api.RPC.GetBalanceTest do
-
   use ExUnit.Case, async: true
 
   alias Bastille.Features.Api.RPC.GetBalance
@@ -18,10 +17,12 @@ defmodule Bastille.Features.Api.RPC.GetBalanceTest do
       result = GetBalance.call(%{"address" => ""})
 
       assert is_map(result)
+
       case result do
         %{address: "", balance: balance} ->
           # Empty address processed, balance should be numeric
           assert is_number(balance)
+
         %{error: _} ->
           # Error response also acceptable
           assert true
@@ -32,10 +33,12 @@ defmodule Bastille.Features.Api.RPC.GetBalanceTest do
       result = GetBalance.call(%{"address" => 123})
 
       assert is_map(result)
+
       case result do
         %{address: 123, balance: balance} ->
           # Non-string address processed, balance should be numeric
           assert is_number(balance)
+
         %{error: _} ->
           # Error response also acceptable
           assert true
@@ -71,7 +74,8 @@ defmodule Bastille.Features.Api.RPC.GetBalanceTest do
         "invalid_address",
         "1234short",
         "wrongprefix" <> String.duplicate("a", 40),
-        "1789" <> String.duplicate("x", 10)  # too short
+        # too short
+        "1789" <> String.duplicate("x", 10)
       ]
 
       for address <- invalid_addresses do
@@ -81,7 +85,8 @@ defmodule Bastille.Features.Api.RPC.GetBalanceTest do
         # Should either return an error or handle gracefully
         case result do
           %{error: _} -> assert true
-          %{balance: _} -> assert true  # Some invalid formats might still get processed
+          # Some invalid formats might still get processed
+          %{balance: _} -> assert true
           _ -> assert true
         end
       end
@@ -102,11 +107,12 @@ defmodule Bastille.Features.Api.RPC.GetBalanceTest do
       prefix = Application.get_env(:bastille, :address_prefix, "1789")
       address = prefix <> String.duplicate("b", 40)
 
-      result = GetBalance.call(%{
-        "address" => address,
-        "unused" => "parameter",
-        "ignored" => 123
-      })
+      result =
+        GetBalance.call(%{
+          "address" => address,
+          "unused" => "parameter",
+          "ignored" => 123
+        })
 
       assert is_map(result)
       # Should process the address parameter and ignore others

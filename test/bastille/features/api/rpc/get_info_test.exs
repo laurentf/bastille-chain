@@ -1,5 +1,4 @@
 defmodule Bastille.Features.Api.RPC.GetInfoTest do
-
   use ExUnit.Case, async: true
 
   alias Bastille.Features.Api.RPC.GetInfo
@@ -16,6 +15,7 @@ defmodule Bastille.Features.Api.RPC.GetInfoTest do
         %{chain: _, consensus: _, mempool: _, mining: _, network: _, security: _} ->
           # Verify complete info response structure
           expected_keys = [:chain, :consensus, :mempool, :mining, :network, :security]
+
           for key <- expected_keys do
             assert Map.has_key?(result, key)
           end

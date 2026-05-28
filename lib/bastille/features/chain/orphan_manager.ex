@@ -12,11 +12,15 @@ defmodule Bastille.Features.Chain.OrphanManager do
   alias Bastille.Features.Block.Block
 
   @default_max_orphans 500
-  @default_max_orphan_age_ms 600_000 # 10 minutes
-  @cleanup_interval_ms 60_000        # every minute
+  # 10 minutes
+  @default_max_orphan_age_ms 600_000
+  # every minute
+  @cleanup_interval_ms 60_000
 
-  defstruct orphan_blocks: %{},          # %{block_hash => %{block: Block.t(), received_at: ms}}
-            blocks_by_parent: %{},       # %{parent_hash => [block_hash, ...]}
+  # %{block_hash => %{block: Block.t(), received_at: ms}}
+  defstruct orphan_blocks: %{},
+            # %{parent_hash => [block_hash, ...]}
+            blocks_by_parent: %{},
             max_orphans: @default_max_orphans,
             max_orphan_age_ms: @default_max_orphan_age_ms
 
@@ -59,7 +63,11 @@ defmodule Bastille.Features.Chain.OrphanManager do
     }
 
     Process.send_after(self(), :cleanup_expired, @cleanup_interval_ms)
-    Logger.info("🔄 OrphanManager started (max=#{state.max_orphans}, max_age=#{div(state.max_orphan_age_ms, 60_000)}min)")
+
+    Logger.info(
+      "🔄 OrphanManager started (max=#{state.max_orphans}, max_age=#{div(state.max_orphan_age_ms, 60_000)}min)"
+    )
+
     {:ok, state}
   end
 
@@ -67,8 +75,12 @@ defmodule Bastille.Features.Chain.OrphanManager do
   def handle_call({:add_orphan, %Block{} = block}, _from, %__MODULE__{} = state) do
     case validate_and_add(block, state) do
       {:ok, new_state} ->
-        Logger.info("🔄 Orphan block #{block.header.index} queued (parent #{short(block.header.previous_hash)})")
+        Logger.info(
+          "🔄 Orphan block #{block.header.index} queued (parent #{short(block.header.previous_hash)})"
+        )
+
         {:reply, :ok, new_state}
+
       {:error, reason} = err ->
         Logger.warning("⚠️ Orphan rejected: #{inspect(reason)}")
         {:reply, err, state}
@@ -77,7 +89,11 @@ defmodule Bastille.Features.Chain.OrphanManager do
 
   @impl true
   def handle_call({:get_by_parent, parent_hash}, _from, %__MODULE__{} = state) do
-    blocks = parent_hash |> Map.get(state.blocks_by_parent, []) |> Enum.map(&state.orphan_blocks[&1].block)
+    blocks =
+      parent_hash
+      |> Map.get(state.blocks_by_parent, [])
+      |> Enum.map(&state.orphan_blocks[&1].block)
+
     {:reply, blocks, state}
   end
 
@@ -93,6 +109,7 @@ defmodule Bastille.Features.Chain.OrphanManager do
   @impl true
   def handle_call(:stats, _from, %__MODULE__{} = state) do
     count = map_size(state.orphan_blocks)
+
     oldest =
       if count == 0 do
         0
@@ -100,6 +117,7 @@ defmodule Bastille.Features.Chain.OrphanManager do
         now = System.system_time(:millisecond)
         state.orphan_blocks |> Map.values() |> Enum.map(&(now - &1.received_at)) |> Enum.max()
       end
+
     {:reply, %{count: count, oldest_age_ms: oldest}, state}
   end
 
@@ -129,7 +147,9 @@ defmodule Bastille.Features.Chain.OrphanManager do
   end
 
   defp valid_block_shape(%Block{} = block) do
-    if is_binary(block.hash) and is_binary(block.header.previous_hash), do: :ok, else: {:error, :invalid_structure}
+    if is_binary(block.hash) and is_binary(block.header.previous_hash),
+      do: :ok,
+      else: {:error, :invalid_structure}
   end
 
   defp check_capacity(%__MODULE__{orphan_blocks: orphans, max_orphans: max}) do
@@ -142,27 +162,34 @@ defmodule Bastille.Features.Chain.OrphanManager do
     now = System.system_time(:millisecond)
     orphan_blocks = Map.put(state.orphan_blocks, block.hash, %{block: block, received_at: now})
     parent = block.header.previous_hash
-    blocks_by_parent = Map.update(state.blocks_by_parent, parent, [block.hash], &[block.hash | &1])
+
+    blocks_by_parent =
+      Map.update(state.blocks_by_parent, parent, [block.hash], &[block.hash | &1])
+
     %{state | orphan_blocks: orphan_blocks, blocks_by_parent: blocks_by_parent}
   end
 
   defp remove_orphans(block_hashes, %__MODULE__{} = state) do
     orphan_blocks = Map.drop(state.orphan_blocks, block_hashes)
+
     blocks_by_parent =
       state.blocks_by_parent
       |> Enum.map(fn {parent, children} -> {parent, children -- block_hashes} end)
       |> Enum.reject(fn {_p, children} -> children == [] end)
       |> Map.new()
+
     %{state | orphan_blocks: orphan_blocks, blocks_by_parent: blocks_by_parent}
   end
 
   defp cleanup_expired(%__MODULE__{} = state) do
     now = System.system_time(:millisecond)
     cutoff = now - state.max_orphan_age_ms
+
     expired =
       state.orphan_blocks
       |> Enum.filter(fn {_h, %{received_at: t}} -> t < cutoff end)
       |> Enum.map(fn {h, _} -> h end)
+
     if expired == [] do
       state
     else

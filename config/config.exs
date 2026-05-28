@@ -8,10 +8,12 @@ config :bastille,
   # Explicit network identifier (used in P2P version handshake)
   network: :testnet,
   # Address prefix configuration
-  address_prefix: "f789",  # Default test prefix (hex-valid, same length as prod "1789")
+  # Default test prefix (hex-valid, same length as prod "1789")
+  address_prefix: "f789",
 
   # RPC API Configuration
-  rpc_port: 8332,  # Default RPC port (can be overridden per environment)
+  # Default RPC port (can be overridden per environment)
+  rpc_port: 8332,
 
   # Enable the REST API
   enable_api: false,
@@ -19,7 +21,8 @@ config :bastille,
   # Mining configuration - disabled by default
   mining: [
     enabled: false,
-    address: nil  # Set this to enable auto-mining
+    # Set this to enable auto-mining
+    address: nil
     # Note: block_reward is a protocol constant (1789 BAST), not configurable
   ],
 
@@ -28,8 +31,10 @@ config :bastille,
     module: Bastille.Features.Mining.ProofOfWork,
     config: %{
       initial_difficulty: 4,
-      target_block_time: 10_000,  # 10 seconds
-      difficulty_adjustment_interval: 10,  # blocks
+      # 10 seconds
+      target_block_time: 10_000,
+      # blocks
+      difficulty_adjustment_interval: 10,
       max_difficulty_change_factor: 4.0,
       minimum_difficulty: 1
     }
@@ -56,9 +61,11 @@ config :bastille,
   # Storage configuration - test paths by default
   storage: [
     base_path: "data/test",
-    node_prefix: nil  # Optional prefix for multi-node setups (e.g., "node1", "node2")
+    # Optional prefix for multi-node setups (e.g., "node1", "node2")
+    node_prefix: nil
   ]
-  # Note: Using 4-database architecture (blocks, chain, state, index) - no single bastille.cubdb
+
+# Note: Using 4-database architecture (blocks, chain, state, index) - no single bastille.cubdb
 
 # Environment-specific configuration
 config :logger,
@@ -75,5 +82,6 @@ case Mix.env() do
   :node1 -> import_config "node1.exs"
   :node2 -> import_config "node2.exs"
   :node3 -> import_config "node3.exs"
-  _ -> import_config "test.exs"  # Default to test
+  # Default to test
+  _ -> import_config "test.exs"
 end

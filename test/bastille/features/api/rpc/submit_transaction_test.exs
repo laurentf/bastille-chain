@@ -18,11 +18,14 @@ defmodule Bastille.Features.Api.RPC.SubmitTransactionTest do
         nonce: 1
       )
 
-    signed = %{tx | signature: %{
-      dilithium: :crypto.strong_rand_bytes(2420),
-      falcon: :crypto.strong_rand_bytes(690),
-      sphincs: :crypto.strong_rand_bytes(7856)
-    }}
+    signed = %{
+      tx
+      | signature: %{
+          dilithium: :crypto.strong_rand_bytes(2420),
+          falcon: :crypto.strong_rand_bytes(690),
+          sphincs: :crypto.strong_rand_bytes(7856)
+        }
+    }
 
     Transaction.to_json_map(signed)
   end

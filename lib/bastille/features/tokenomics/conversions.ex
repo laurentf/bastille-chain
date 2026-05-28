@@ -110,6 +110,7 @@ defmodule Bastille.Features.Tokenomics.Conversions do
       String.ends_with?(amount_str, " juillet") ->
         # Parse as juillet directly
         juillet_str = String.replace_suffix(amount_str, " juillet", "")
+
         case parse_integer_with_commas(juillet_str) do
           {:ok, juillet} -> {:ok, juillet}
           :error -> {:error, :invalid_amount}
@@ -118,6 +119,7 @@ defmodule Bastille.Features.Tokenomics.Conversions do
       String.ends_with?(amount_str, " BAST") ->
         # Parse as BAST and convert
         bast_str = String.replace_suffix(amount_str, " BAST", "")
+
         case Float.parse(bast_str) do
           {bast, ""} -> {:ok, bast_to_juillet(bast)}
           _ -> {:error, :invalid_amount}
@@ -143,6 +145,7 @@ defmodule Bastille.Features.Tokenomics.Conversions do
 
   defp parse_integer_with_commas(str) do
     clean_str = String.replace(str, ",", "")
+
     case Integer.parse(clean_str) do
       {int, ""} -> {:ok, int}
       _ -> :error

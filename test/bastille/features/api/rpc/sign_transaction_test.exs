@@ -53,12 +53,14 @@ defmodule Bastille.Features.Api.RPC.SignTransactionTest do
     test "rejects a base64+ETF unsigned_transaction (security regression)" do
       # The old API accepted base64-encoded ETF. The new API must reject.
       legacy_payload =
-        Base.encode64(:erlang.term_to_binary(%{
-          from: "1789abc",
-          to: "1789def",
-          amount: 1000,
-          nonce: 1
-        }))
+        Base.encode64(
+          :erlang.term_to_binary(%{
+            from: "1789abc",
+            to: "1789def",
+            amount: 1000,
+            nonce: 1
+          })
+        )
 
       result =
         SignTransaction.call(%{

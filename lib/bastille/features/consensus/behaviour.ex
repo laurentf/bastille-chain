@@ -31,7 +31,8 @@ defmodule Bastille.Features.Consensus.Behaviour do
   @doc """
   Updates the consensus state after a block is added to the chain.
   """
-  @callback update_state(Block.t(), consensus_state()) :: {:ok, consensus_state()} | {:error, term()}
+  @callback update_state(Block.t(), consensus_state()) ::
+              {:ok, consensus_state()} | {:error, term()}
 
   @doc """
   Gets the current difficulty for block production.

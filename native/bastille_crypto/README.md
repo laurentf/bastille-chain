@@ -1,79 +1,66 @@
 # 🔐 Bastille Crypto NIF
 
-Native Rust implementations for Bastille blockchain cryptography.
+Native Rust implementations for Bastille's post-quantum cryptography and Blake3
+proof-of-work, exposed to Elixir via Rustler.
 
 ## 🚀 Overview
 
-This NIF (Native Implemented Function) provides high-performance Rust implementations for:
+- **Post-quantum signatures**: Dilithium2 (ML-DSA-44), Falcon512 (FN-DSA-512),
+  SPHINCS+ SHAKE-128f (SLH-DSA-128f).
+- **Deterministic key derivation**: every keypair can be derived purely from a
+  seed (`*_keypair_from_seed`), byte-identical across processes and machines —
+  no OS RNG, no on-disk key cache. This is what makes BIP39 mnemonic recovery
+  work; the derivation design is documented in `docs/key_derivation_design.md`.
+- **Blake3 hashing**: `blake3_hash/1`, the hash behind Bastille's Blake3
+  proof-of-work (a low-memory alternative to RandomX — Bastille does **not** use
+  RandomX).
 
-- **Post-Quantum Cryptography**: Dilithium, Falcon, SPHINCS+ signatures
-- **Real RandomX Mining**: Authentic RandomX algorithm with ~2GB memory requirement
-- **Address Generation**: "1789..." revolutionary address format
-- **Multi-signature Support**: 2/3 threshold post-quantum signatures
+## 🛠️ Build requirements
 
-## 🛠️ Build Requirements
+- **Rust**: stable toolchain (via `rustup`).
+- **Rustler**: Elixir ↔ Rust integration (declared in `mix.exs`).
 
-- **Rust**: Latest stable version
-- **CMake**: For RandomX compilation  
-- **Visual C++ Build Tools 2022**: Windows compilation
-- **Rustler**: Elixir-Rust integration
+No CMake / RandomX dependency.
 
 ## 🔧 Building
 
-The NIF builds automatically with the Bastille project:
+The NIF builds automatically with the project:
 
 ```bash
-# Development build
-mix compile
-
-# Production build
-MIX_ENV=prod mix compile
-
-# Force rebuild
-mix clean && mix compile
+mix compile                 # development
+MIX_ENV=prod mix compile    # production
+mix clean && mix compile    # force rebuild
 ```
 
 ## 📋 Functions
 
-### Post-Quantum Cryptography
-- `generate_keypair/1` - Generate Dilithium/Falcon/SPHINCS+ keys
-- `sign/3` - Create post-quantum signatures
-- `verify/4` - Verify post-quantum signatures
-- `multi_sign/3` - 2/3 threshold signatures
-- `multi_verify/4` - Verify threshold signatures
+### Post-quantum signatures
 
-### RandomX Mining  
-- `randomx_init_cache/1` - Initialize RandomX cache (~2GB)
-- `randomx_hash/2` - Compute RandomX hash
-- `randomx_mine/5` - Complete mining with nonce search
-- `randomx_verify/4` - Verify RandomX proof-of-work
+- `dilithium2_keypair/0`, `dilithium2_keypair_from_seed/1`
+- `dilithium2_sign/2`, `dilithium2_verify/3`
+- `falcon512_keypair/0`, `falcon512_keypair_from_seed/1`
+- `falcon512_sign/2`, `falcon512_verify/3`
+- `sphincsplus_shake_128f_keypair/0`, `sphincsplus_keypair_from_seed/1`
+- `sphincsplus_shake_128f_sign/2`, `sphincsplus_shake_128f_verify/3`
 
-### Address System
-- `generate_address/1` - Create "1789..." addresses
-- `validate_address/1` - Validate address format and checksum
+### Hashing
+
+- `blake3_hash/1` — single Blake3 hash, used for proof-of-work.
+
+### Introspection
+
+- `nifs_loaded/0`, `get_algorithm_info/0`
+
+The Elixir side wraps these in `Bastille.Infrastructure.Crypto.CryptoNif` and the
+higher-level `Bastille.Shared.Crypto` (which composes the three signatures into a
+2-of-3 post-quantum scheme and derives `1789…` / `f789…` addresses).
 
 ## 🧪 Testing
 
-Tests are integrated with the main Bastille test suite:
-
 ```bash
-# Test post-quantum crypto NIFs
-mix test test/bastille/core/crypto_test.exs
-
-# Test RandomX NIFs
-mix test test/bastille/core/randomx_nif_test.exs
-
-# Performance benchmarks
-mix test test/performance/benchmark_test.exs --include performance
+mix test test/bastille/infrastructure/crypto/crypto_nif_test.exs
+mix test test/bastille/shared/crypto_test.exs
+mix test test/bastille/shared/key_derivation_kat_test.exs   # frozen KAT vectors
 ```
 
-## ⚡ Performance
-
-- **RandomX**: Optimized for modern CPUs with ~2GB memory requirement
-- **Post-Quantum**: Hardware-accelerated where available
-- **Memory**: Efficient allocation and deallocation
-- **Threading**: Multi-threaded RandomX mining support
-
-## 🏰 Vive la Révolution !
-
-Revolutionary cryptography for the people! 🇫🇷
+## 🏰 Vive la Révolution ! 🇫🇷

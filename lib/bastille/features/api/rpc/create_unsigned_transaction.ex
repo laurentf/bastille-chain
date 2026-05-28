@@ -34,8 +34,14 @@ defmodule Bastille.Features.Api.RPC.CreateUnsignedTransaction do
         Logger.info("📝 Unsigned tx prepared")
         Logger.info("   └─ from: #{unsigned_tx.from}")
         Logger.info("   └─ to: #{unsigned_tx.to}")
-        Logger.info("   └─ amount: #{unsigned_tx.amount} juillet, fee: #{unsigned_tx.fee} juillet")
-        Logger.info("   └─ hash: #{Base.encode16(unsigned_tx.hash, case: :lower) |> String.slice(0, 16)}...")
+
+        Logger.info(
+          "   └─ amount: #{unsigned_tx.amount} juillet, fee: #{unsigned_tx.fee} juillet"
+        )
+
+        Logger.info(
+          "   └─ hash: #{Base.encode16(unsigned_tx.hash, case: :lower) |> String.slice(0, 16)}..."
+        )
 
         # Flat: the RPC dispatcher already wraps the return value under `result:`.
         %{

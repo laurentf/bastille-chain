@@ -16,17 +16,27 @@ defmodule Bastille.Features.Transaction.Transaction do
   alias Bastille.Infrastructure.Storage.CubDB.State
 
   @type t :: %__MODULE__{
-    from: String.t(),                    # "1789..." format address
-    to: String.t(),                      # "1789..." format address
-    amount: Token.amount_juillet(),      # Amount in juillet (14 decimals)
-    fee: Token.amount_juillet(),         # Fee in juillet
-    nonce: non_neg_integer(),            # Transaction nonce
-    timestamp: integer(),                # Unix timestamp
-    data: binary(),                      # Additional data payload
-    signature: map() | nil,              # Post-quantum or legacy signature
-    signature_type: atom(),              # :post_quantum_2_of_3 | :secp256k1
-    hash: binary() | nil                 # Transaction hash
-  }
+          # "1789..." format address
+          from: String.t(),
+          # "1789..." format address
+          to: String.t(),
+          # Amount in juillet (14 decimals)
+          amount: Token.amount_juillet(),
+          # Fee in juillet
+          fee: Token.amount_juillet(),
+          # Transaction nonce
+          nonce: non_neg_integer(),
+          # Unix timestamp
+          timestamp: integer(),
+          # Additional data payload
+          data: binary(),
+          # Post-quantum or legacy signature
+          signature: map() | nil,
+          # :post_quantum_2_of_3 | :secp256k1
+          signature_type: atom(),
+          # Transaction hash
+          hash: binary() | nil
+        }
 
   @derive Jason.Encoder
   defstruct [
@@ -58,7 +68,8 @@ defmodule Bastille.Features.Transaction.Transaction do
       from: opts |> Keyword.fetch!(:from) |> Address.canonical(),
       to: opts |> Keyword.fetch!(:to) |> Address.canonical(),
       amount: Keyword.fetch!(opts, :amount),
-      fee: 0, # placeholder, will set below
+      # placeholder, will set below
+      fee: 0,
       nonce: Keyword.fetch!(opts, :nonce),
       timestamp: Keyword.get(opts, :timestamp, System.system_time(:second)),
       data: Keyword.get(opts, :data, <<>>),
@@ -79,8 +90,10 @@ defmodule Bastille.Features.Transaction.Transaction do
   @spec calculate_fee(t()) :: integer()
   def calculate_fee(tx) do
     size = :erlang.term_to_binary(tx) |> byte_size()
-    fee_per_byte = 10_000 # 0.0001 BAST per byte (in juillet)
-    min_fee = 100_000     # 0.001 BAST minimum (in juillet)
+    # 0.0001 BAST per byte (in juillet)
+    fee_per_byte = 10_000
+    # 0.001 BAST minimum (in juillet)
+    min_fee = 100_000
     max(size * fee_per_byte, min_fee)
   end
 
@@ -93,13 +106,15 @@ defmodule Bastille.Features.Transaction.Transaction do
     reward_juillet = Token.block_reward(block_height)
 
     %__MODULE__{
-      from: "1789Genesis", # Special genesis address for coinbase
+      # Special genesis address for coinbase
+      from: "1789Genesis",
       to: miner_address,
       amount: reward_juillet,
       fee: 0,
       nonce: 0,
       timestamp: System.system_time(:second),
-      data: "Coinbase transaction for block #{block_height} - Reward: #{Token.format_bast(reward_juillet)}",
+      data:
+        "Coinbase transaction for block #{block_height} - Reward: #{Token.format_bast(reward_juillet)}",
       signature: %{type: :coinbase},
       signature_type: :coinbase,
       hash: nil
@@ -117,9 +132,10 @@ defmodule Bastille.Features.Transaction.Transaction do
     base_reward = Token.block_reward(block_height)
 
     # Calculate total fees from transactions (excluding coinbase)
-    total_fees = transactions
-                |> Enum.filter(fn tx -> tx.signature_type != :coinbase end)
-                |> Enum.reduce(0, fn tx, acc -> acc + tx.fee end)
+    total_fees =
+      transactions
+      |> Enum.filter(fn tx -> tx.signature_type != :coinbase end)
+      |> Enum.reduce(0, fn tx, acc -> acc + tx.fee end)
 
     # Apply burn mechanism: miner gets 70% of fees, 30% burned
     miner_fee_share = Token.calculate_remaining_fee(total_fees)
@@ -133,20 +149,23 @@ defmodule Bastille.Features.Transaction.Transaction do
     # Total miner reward = base reward + 70% of transaction fees
     total_reward = base_reward + miner_fee_share
 
-    fee_info = if total_fees > 0 do
-      " | Fees: #{Token.format_bast(total_fees)} (70% to miner: #{Token.format_bast(miner_fee_share)}, 30% burned: #{Token.format_bast(burned_amount)})"
-    else
-      ""
-    end
+    fee_info =
+      if total_fees > 0 do
+        " | Fees: #{Token.format_bast(total_fees)} (70% to miner: #{Token.format_bast(miner_fee_share)}, 30% burned: #{Token.format_bast(burned_amount)})"
+      else
+        ""
+      end
 
     %__MODULE__{
-      from: "1789Genesis", # Special genesis address for coinbase
+      # Special genesis address for coinbase
+      from: "1789Genesis",
       to: miner_address,
       amount: total_reward,
       fee: 0,
       nonce: 0,
       timestamp: System.system_time(:second),
-      data: "Coinbase transaction for block #{block_height} - Base reward: #{Token.format_bast(base_reward)}#{fee_info}",
+      data:
+        "Coinbase transaction for block #{block_height} - Base reward: #{Token.format_bast(base_reward)}#{fee_info}",
       signature: %{type: :coinbase},
       signature_type: :coinbase,
       hash: nil
@@ -163,8 +182,6 @@ defmodule Bastille.Features.Transaction.Transaction do
     signature = Crypto.sign(message, keypair)
     %{tx | signature: signature, signature_type: :post_quantum_2_of_3}
   end
-
-
 
   @doc """
   Calculates the hash of a transaction.
@@ -193,6 +210,7 @@ defmodule Bastille.Features.Transaction.Transaction do
   def hash(%__MODULE__{hash: nil} = tx) do
     calculate_hash(tx).hash
   end
+
   def hash(%__MODULE__{hash: hash}), do: hash
 
   @doc """
@@ -241,6 +259,7 @@ defmodule Bastille.Features.Transaction.Transaction do
         case Crypto.verify(message, tx.signature, public_keys) do
           true ->
             true
+
           false ->
             Logger.warning("⚠️ Tx signature invalid for #{encode_hash(tx.hash)} (from #{tx.from})")
             false
@@ -251,7 +270,10 @@ defmodule Bastille.Features.Transaction.Transaction do
         false
 
       {:error, reason} ->
-        Logger.warning("⚠️ Tx signature unverifiable: pubkey lookup failed (#{inspect(reason)}) for #{tx.from}")
+        Logger.warning(
+          "⚠️ Tx signature unverifiable: pubkey lookup failed (#{inspect(reason)}) for #{tx.from}"
+        )
+
         false
     end
   end
@@ -261,7 +283,9 @@ defmodule Bastille.Features.Transaction.Transaction do
 
   def verify_signature(_), do: false
 
-  defp encode_hash(hash) when is_binary(hash), do: hash |> Base.encode16(case: :lower) |> String.slice(0, 16)
+  defp encode_hash(hash) when is_binary(hash),
+    do: hash |> Base.encode16(case: :lower) |> String.slice(0, 16)
+
   defp encode_hash(_), do: "<no-hash>"
 
   @doc """
@@ -394,6 +418,7 @@ defmodule Bastille.Features.Transaction.Transaction do
   def from_binary(binary) when is_binary(binary) do
     try do
       tx = :erlang.binary_to_term(binary)
+
       if is_struct(tx, __MODULE__) do
         {:ok, tx}
       else
@@ -456,14 +481,16 @@ defmodule Bastille.Features.Transaction.Transaction do
   # Private functions
 
   defp valid_structure?(%__MODULE__{
-    amount: amount,
-    fee: fee,
-    nonce: nonce,
-    timestamp: timestamp
-  }) when is_integer(nonce) and nonce >= 0 and
-           is_integer(timestamp) do
+         amount: amount,
+         fee: fee,
+         nonce: nonce,
+         timestamp: timestamp
+       })
+       when is_integer(nonce) and nonce >= 0 and
+              is_integer(timestamp) do
     Token.valid_amount?(amount) and Token.valid_amount?(fee)
   end
+
   defp valid_structure?(_), do: false
 
   defp valid_addresses?(%__MODULE__{from: from, to: to}) do
@@ -472,15 +499,20 @@ defmodule Bastille.Features.Transaction.Transaction do
 
   defp valid_address?(address) when is_binary(address) do
     cond do
-      address == "1789Genesis" -> true  # Synthetic coinbase sender label
-      String.starts_with?(address, "legacy_") -> true  # Legacy format
-      true -> Address.valid?(address)  # Standard format + EIP-55-like checksum
+      # Synthetic coinbase sender label
+      address == "1789Genesis" -> true
+      # Legacy format
+      String.starts_with?(address, "legacy_") -> true
+      # Standard format + EIP-55-like checksum
+      true -> Address.valid?(address)
     end
   end
+
   defp valid_address?(_), do: false
 
   defp valid_signature?(%__MODULE__{signature: nil}), do: false
-  defp valid_signature?(%__MODULE__{signature: %{type: :coinbase}}), do: true  # Coinbase
+  # Coinbase
+  defp valid_signature?(%__MODULE__{signature: %{type: :coinbase}}), do: true
   defp valid_signature?(tx), do: verify_signature(tx)
 
   defp valid_hash?(%__MODULE__{} = tx) do
@@ -491,6 +523,7 @@ defmodule Bastille.Features.Transaction.Transaction do
   defp atom_to_binary(atom) when is_atom(atom) do
     atom |> Atom.to_string() |> :binary.copy()
   end
+
   defp atom_to_binary(other), do: to_string(other)
 
   # === JSON-map helpers (safe RPC parsing) ===

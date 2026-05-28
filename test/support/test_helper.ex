@@ -19,30 +19,31 @@ defmodule Bastille.TestHelper do
       {Bastille.Infrastructure.Storage.CubDB.Index, []},
       {Bastille.Infrastructure.Storage.CubDB.State, []}
     ]
-    
+
     # Start core blockchain services
     core_services = [
       {Bastille.Features.Chain.Chain, []},
       {Bastille.Features.Transaction.Mempool, []},
-      {Bastille.Features.Consensus.Engine, [consensus_module: Bastille.Features.Mining.ProofOfWork]},
+      {Bastille.Features.Consensus.Engine,
+       [consensus_module: Bastille.Features.Mining.ProofOfWork]},
       {Bastille.Features.Mining.MiningCoordinator, []}
     ]
-    
+
     # Start all services
     all_services = storage_services ++ core_services
-    
+
     Enum.each(all_services, fn {module, opts} ->
       unless Process.whereis(module) do
         start_supervised!({module, opts})
       end
     end)
-    
+
     # Give services time to initialize
     Process.sleep(100)
-    
+
     :ok
   end
-  
+
   def stop_test_services do
     services = [
       Bastille.Features.Mining.MiningCoordinator,
@@ -54,26 +55,26 @@ defmodule Bastille.TestHelper do
       Bastille.Infrastructure.Storage.CubDB.Chain,
       Bastille.Infrastructure.Storage.CubDB.Blocks
     ]
-    
+
     Enum.each(services, fn module ->
       if pid = Process.whereis(module) do
         Process.exit(pid, :normal)
       end
     end)
-    
+
     # Give services time to stop
     Process.sleep(100)
-    
+
     :ok
   end
-  
+
   @doc """
   Create a test transaction.
   """
   def create_test_transaction(opts \\ []) do
     defaults = [
       from: "f789testfrom",
-      to: "f789testto", 
+      to: "f789testto",
       amount: 1000,
       fee: 100,
       nonce: 1,
@@ -90,7 +91,7 @@ defmodule Bastille.TestHelper do
   def generate_test_keypair do
     pq_keys = Crypto.generate_keypair()
     address = Crypto.generate_bastille_address(pq_keys)
-    
+
     Map.put(pq_keys, :address, address)
   end
 
@@ -108,7 +109,7 @@ defmodule Bastille.TestHelper do
       falcon: from_keypair.falcon.public,
       sphincs: from_keypair.sphincs.public
     }
-    
+
     to_public_keys = %{
       dilithium: to_keypair.dilithium.public,
       falcon: to_keypair.falcon.public,
@@ -128,10 +129,10 @@ defmodule Bastille.TestHelper do
     ]
 
     final_opts = Keyword.merge(default_opts, opts)
-    
+
     # Create transaction
     tx = Transaction.new(final_opts)
-    
+
     # Sign the transaction
     Transaction.sign(tx, from_keypair)
   end
@@ -144,14 +145,14 @@ defmodule Bastille.TestHelper do
     index = Keyword.get(opts, :index, 0)
     _miner_address = Keyword.get(opts, :miner_address, "f789testminer")
 
-    Block.new([
+    Block.new(
       index: index,
       transactions: transactions,
       previous_hash: <<0::256>>,
       timestamp: System.system_time(:second),
       nonce: 0,
       difficulty: 1
-    ])
+    )
   end
 
   @doc """
@@ -203,7 +204,49 @@ defmodule Bastille.TestHelper do
 
     :ok
   end
-  
+
+  # Storage + chain children of the app supervisor, dependents first (terminate
+  # in this order; restart reversed so the stores come back before the chain
+  # that reads them at init).
+  @reset_children [
+    Bastille.Features.Chain.Chain,
+    Bastille.Features.Chain.OrphanManager,
+    Bastille.Infrastructure.Storage.CubDB.Index,
+    Bastille.Infrastructure.Storage.CubDB.State,
+    Bastille.Infrastructure.Storage.CubDB.Chain,
+    Bastille.Infrastructure.Storage.CubDB.Blocks
+  ]
+
+  @doc """
+  Reset the storage + chain layer to a clean genesis by restarting the supervised
+  children through the app supervisor, after pausing the background miner.
+
+  Prefer this in integration tests over `GenServer.stop` + `start_link`: stopping
+  a supervised singleton makes the supervisor auto-restart it (burning its
+  restart budget) and races a manually-started replacement for the registered
+  name — which desyncs the supervisor and flakes the rest of the suite. Driving
+  the supervised children directly (`terminate_child` / `restart_child`) does
+  neither, and each child's `init` recreates its own data dir (working around
+  test_helper.exs deleting the dir out from under the live CubDB stores).
+  """
+  @spec reset_chain_storage() :: :ok
+  def reset_chain_storage do
+    if Process.whereis(Bastille.Features.Mining.MiningCoordinator) do
+      Bastille.Features.Mining.MiningCoordinator.stop_mining()
+    end
+
+    sup = Bastille.Supervisor
+    Enum.each(@reset_children, &Supervisor.terminate_child(sup, &1))
+    File.rm_rf(Bastille.Infrastructure.Storage.CubDB.Paths.base_path())
+    @reset_children |> Enum.reverse() |> Enum.each(&Supervisor.restart_child(sup, &1))
+
+    # restart_child is synchronous (returns after each init), but assert the
+    # chain is actually serving before handing control back — a readiness
+    # barrier beats a fixed sleep.
+    _ = Bastille.Features.Chain.Chain.get_height()
+    :ok
+  end
+
   # Private helper functions
   defp start_supervised!(child_spec) do
     case ExUnit.Callbacks.start_supervised(child_spec) do
@@ -214,7 +257,8 @@ defmodule Bastille.TestHelper do
   end
 
   defp count_bits_in_byte(0), do: 0
+
   defp count_bits_in_byte(byte) do
-    1 + count_bits_in_byte(byte &&& (byte - 1))
+    1 + count_bits_in_byte(byte &&& byte - 1)
   end
 end

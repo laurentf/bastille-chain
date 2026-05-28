@@ -11,12 +11,12 @@ defmodule Bastille.Features.Consensus.ProofOfWorkTest do
 
   # Helper function to create test block
   defp create_test_block() do
-    Block.new([
+    Block.new(
       index: 1,
       previous_hash: <<1::256>>,
       transactions: [],
       difficulty: 4
-    ])
+    )
   end
 
   describe "ProofOfWork module initialization" do
@@ -34,6 +34,7 @@ defmodule Bastille.Features.Consensus.ProofOfWorkTest do
         initial_difficulty: 8,
         max_target: 1000
       }
+
       pow_state = create_pow_state(config)
       assert pow_state.target_block_time == 15_000
       assert pow_state.current_difficulty == 8
@@ -45,7 +46,7 @@ defmodule Bastille.Features.Consensus.ProofOfWorkTest do
     test "validates block with ProofOfWork" do
       block = create_test_block()
       pow_state = create_pow_state()
-      
+
       # Basic validation should work
       result = ProofOfWork.validate_block(block, pow_state)
       assert is_boolean(result) or match?({:ok, _}, result) or match?({:error, _}, result)
@@ -60,8 +61,9 @@ defmodule Bastille.Features.Consensus.ProofOfWorkTest do
   describe "difficulty adjustment" do
     test "adjust_difficulty with insufficient block times" do
       pow_state = create_pow_state()
-      block_times = [10_000, 11_000]  # Less than adjustment interval
-      
+      # Less than adjustment interval
+      block_times = [10_000, 11_000]
+
       # Should return current difficulty when not enough blocks
       result = ProofOfWork.adjust_difficulty(block_times, pow_state)
       assert result == pow_state.current_difficulty
@@ -71,10 +73,11 @@ defmodule Bastille.Features.Consensus.ProofOfWorkTest do
       pow_state = create_pow_state()
       # Create enough block times for adjustment (10 blocks)
       # adjust_difficulty expects block objects with timestamp field
-      block_times = Enum.map(1..10, fn i ->
-        %{timestamp: System.system_time(:millisecond) + (i * 15_000)}
-      end)
-      
+      block_times =
+        Enum.map(1..10, fn i ->
+          %{timestamp: System.system_time(:millisecond) + i * 15_000}
+        end)
+
       result = ProofOfWork.adjust_difficulty(block_times, pow_state)
       assert is_integer(result)
     end
@@ -84,7 +87,7 @@ defmodule Bastille.Features.Consensus.ProofOfWorkTest do
     test "update_state returns updated state" do
       block = create_test_block()
       pow_state = create_pow_state()
-      
+
       result = ProofOfWork.update_state(block, pow_state)
       assert match?({:ok, %ProofOfWork{}}, result)
     end
@@ -94,7 +97,7 @@ defmodule Bastille.Features.Consensus.ProofOfWorkTest do
     test "mine_block_for_test function exists and accepts parameters" do
       _block = create_test_block()
       _pow_state = create_pow_state(%{max_target: 1000})
-      
+
       # Just test that the function exists and can be called without hanging
       # Don't actually mine to avoid test timeouts
       assert function_exported?(ProofOfWork, :mine_block_for_test, 2)
@@ -103,7 +106,7 @@ defmodule Bastille.Features.Consensus.ProofOfWorkTest do
     test "validate_block_for_test validates test blocks" do
       block = create_test_block()
       pow_state = create_pow_state()
-      
+
       if function_exported?(ProofOfWork, :validate_block_for_test, 2) do
         result = ProofOfWork.validate_block_for_test(block, pow_state)
         assert is_boolean(result) or match?({:ok, _}, result) or match?({:error, _}, result)

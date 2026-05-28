@@ -14,7 +14,8 @@ defmodule Bastille.Features.Mining.ProofOfWork do
   @behaviour Bastille.Features.Consensus.Behaviour
 
   # Mining parameters - Bitcoin-like but optimized for Blake3
-  @batch_size 1_000_000  # Large batch size for Blake3 efficiency
+  # Large batch size for Blake3 efficiency
+  @batch_size 1_000_000
 
   defstruct [
     :target_block_time,
@@ -26,19 +27,22 @@ defmodule Bastille.Features.Mining.ProofOfWork do
   ]
 
   @type t :: %__MODULE__{
-    target_block_time: pos_integer(),
-    difficulty_adjustment_interval: pos_integer(),
-    max_difficulty_change_factor: float(),
-    minimum_difficulty: pos_integer(),
-    current_difficulty: pos_integer(),
-    max_target: integer()
-  }
+          target_block_time: pos_integer(),
+          difficulty_adjustment_interval: pos_integer(),
+          max_difficulty_change_factor: float(),
+          minimum_difficulty: pos_integer(),
+          current_difficulty: pos_integer(),
+          max_target: integer()
+        }
 
-  @default_target_block_time 10_000  # 10 seconds target
-  @default_difficulty_adjustment_interval 10  # blocks
+  # 10 seconds target
+  @default_target_block_time 10_000
+  # blocks
+  @default_difficulty_adjustment_interval 10
   @default_max_difficulty_change_factor 4.0
   @default_minimum_difficulty 1
-  @default_initial_difficulty 4  # Starting difficulty for Blake3
+  # Starting difficulty for Blake3
+  @default_initial_difficulty 4
 
   @impl true
   def init(config \\ %{}) do
@@ -46,8 +50,10 @@ defmodule Bastille.Features.Mining.ProofOfWork do
 
     state = %__MODULE__{
       target_block_time: Map.get(config, :target_block_time, @default_target_block_time),
-      difficulty_adjustment_interval: Map.get(config, :difficulty_adjustment_interval, @default_difficulty_adjustment_interval),
-      max_difficulty_change_factor: Map.get(config, :max_difficulty_change_factor, @default_max_difficulty_change_factor),
+      difficulty_adjustment_interval:
+        Map.get(config, :difficulty_adjustment_interval, @default_difficulty_adjustment_interval),
+      max_difficulty_change_factor:
+        Map.get(config, :max_difficulty_change_factor, @default_max_difficulty_change_factor),
       minimum_difficulty: Map.get(config, :minimum_difficulty, @default_minimum_difficulty),
       current_difficulty: Map.get(config, :initial_difficulty, @default_initial_difficulty),
       max_target: max_target
@@ -59,15 +65,23 @@ defmodule Bastille.Features.Mining.ProofOfWork do
   end
 
   @impl true
-  def mine_block(%Bastille.Features.Block.Block{header: %{difficulty: block_difficulty}} = block, %__MODULE__{} = state) do
-    target = if state.max_target > 0 do
-      calculate_configured_target(block_difficulty, state)
-    else
-      calculate_target(block_difficulty)
-    end
+  def mine_block(
+        %Bastille.Features.Block.Block{header: %{difficulty: block_difficulty}} = block,
+        %__MODULE__{} = state
+      ) do
+    target =
+      if state.max_target > 0 do
+        calculate_configured_target(block_difficulty, state)
+      else
+        calculate_target(block_difficulty)
+      end
 
     target_type = if state.max_target > 0, do: "TEST", else: "PRODUCTION"
-    Logger.info("⚡ Mining block #{block.header.index} with Blake3 - #{target_type} difficulty: #{block_difficulty}")
+
+    Logger.info(
+      "⚡ Mining block #{block.header.index} with Blake3 - #{target_type} difficulty: #{block_difficulty}"
+    )
+
     mine_block_simple(block, target)
   end
 
@@ -89,7 +103,8 @@ defmodule Bastille.Features.Mining.ProofOfWork do
   def get_difficulty(%__MODULE__{current_difficulty: difficulty}), do: difficulty
 
   @impl true
-  def adjust_difficulty(recent_block_times, %__MODULE__{} = state) when length(recent_block_times) < state.difficulty_adjustment_interval do
+  def adjust_difficulty(recent_block_times, %__MODULE__{} = state)
+      when length(recent_block_times) < state.difficulty_adjustment_interval do
     state.current_difficulty
   end
 
@@ -130,7 +145,8 @@ defmodule Bastille.Features.Mining.ProofOfWork do
   end
 
   @spec set_difficulty(%__MODULE__{}, non_neg_integer()) :: %__MODULE__{}
-  def set_difficulty(%__MODULE__{} = state, new_difficulty) when is_integer(new_difficulty) and new_difficulty > 0 do
+  def set_difficulty(%__MODULE__{} = state, new_difficulty)
+      when is_integer(new_difficulty) and new_difficulty > 0 do
     %{state | current_difficulty: new_difficulty}
   end
 
@@ -140,9 +156,16 @@ defmodule Bastille.Features.Mining.ProofOfWork do
   Mines a block using easy testing targets for fast test execution.
   """
   @spec mine_block_for_test(Block.t(), %__MODULE__{}) :: {:ok, Block.t()} | {:error, term()}
-  def mine_block_for_test(%Bastille.Features.Block.Block{header: %{difficulty: block_difficulty}} = block, %__MODULE__{} = state) do
+  def mine_block_for_test(
+        %Bastille.Features.Block.Block{header: %{difficulty: block_difficulty}} = block,
+        %__MODULE__{} = state
+      ) do
     target = calculate_configured_target(block_difficulty, state)
-    Logger.info("⚡ TEST Mining block #{block.header.index} with Blake3 - configured difficulty: #{block_difficulty}")
+
+    Logger.info(
+      "⚡ TEST Mining block #{block.header.index} with Blake3 - configured difficulty: #{block_difficulty}"
+    )
+
     mine_block_simple(block, target)
   end
 
@@ -156,7 +179,12 @@ defmodule Bastille.Features.Mining.ProofOfWork do
 
   # ===== BITCOIN-LIKE IMPLEMENTATION WITH BLAKE3 =====
 
-  defp validate_proof_of_work(%Bastille.Features.Block.Block{hash: block_hash, header: %{difficulty: difficulty, nonce: nonce}} = block) do
+  defp validate_proof_of_work(
+         %Bastille.Features.Block.Block{
+           hash: block_hash,
+           header: %{difficulty: difficulty, nonce: nonce}
+         } = block
+       ) do
     case block_hash do
       hash when is_binary(hash) and byte_size(hash) == 32 ->
         # Simple validation: recalculate hash and check if it meets target
@@ -194,13 +222,14 @@ defmodule Bastille.Features.Mining.ProofOfWork do
         elapsed = System.monotonic_time(:millisecond) - start_time
         hash_rate = if elapsed > 0, do: round(nonce / elapsed * 1000), else: 0
 
-        Logger.info("✅ Mining successful! Nonce: #{nonce}, Time: #{elapsed}ms, Rate: #{hash_rate} H/s")
+        Logger.info(
+          "✅ Mining successful! Nonce: #{nonce}, Time: #{elapsed}ms, Rate: #{hash_rate} H/s"
+        )
 
         # Use Block.calculate_blake3_hash for consistent hashing
-        mined_block = %{block |
-          header: %{block.header | nonce: nonce}
-        }
-        |> Block.calculate_blake3_hash()
+        mined_block =
+          %{block | header: %{block.header | nonce: nonce}}
+          |> Block.calculate_blake3_hash()
 
         {:ok, mined_block}
 
@@ -263,7 +292,8 @@ defmodule Bastille.Features.Mining.ProofOfWork do
     |> :binary.decode_unsigned(:big)
   end
 
-  defp calculate_configured_target(difficulty, %__MODULE__{max_target: max_target}) when max_target > 0 do
+  defp calculate_configured_target(difficulty, %__MODULE__{max_target: max_target})
+       when max_target > 0 do
     # Use same logic as validation for consistency (TESTING)
     div(max_target, difficulty)
   end
@@ -274,7 +304,13 @@ defmodule Bastille.Features.Mining.ProofOfWork do
     |> :binary.decode_unsigned(:big)
   end
 
-  defp validate_proof_of_work_with_configured_target(%Bastille.Features.Block.Block{hash: block_hash, header: %{difficulty: difficulty, nonce: nonce}} = block, %__MODULE__{max_target: max_target}) do
+  defp validate_proof_of_work_with_configured_target(
+         %Bastille.Features.Block.Block{
+           hash: block_hash,
+           header: %{difficulty: difficulty, nonce: nonce}
+         } = block,
+         %__MODULE__{max_target: max_target}
+       ) do
     case block_hash do
       hash when is_binary(hash) and byte_size(hash) == 32 ->
         # Simple validation: recalculate hash and check if it meets configured target
@@ -287,7 +323,10 @@ defmodule Bastille.Features.Mining.ProofOfWork do
             {:error, :invalid_hash}
 
           not hash_meets_configured_difficulty?(hash, difficulty, max_target) ->
-            Logger.warning("Hash does not meet CONFIGURED difficulty #{difficulty} for block #{block.header.index}")
+            Logger.warning(
+              "Hash does not meet CONFIGURED difficulty #{difficulty} for block #{block.header.index}"
+            )
+
             {:error, :insufficient_difficulty}
 
           true ->
@@ -303,7 +342,10 @@ defmodule Bastille.Features.Mining.ProofOfWork do
   defp hash_meets_configured_difficulty?(hash, difficulty, max_target) do
     # Handle special case: difficulty 0 = no difficulty requirement (genesis/test blocks)
     case difficulty do
-      0 -> true  # No difficulty validation for genesis or test blocks
+      # No difficulty validation for genesis or test blocks
+      0 ->
+        true
+
       _ ->
         target_int = div(max_target, difficulty)
         target_binary = <<target_int::256>>

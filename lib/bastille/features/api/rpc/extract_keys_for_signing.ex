@@ -13,7 +13,12 @@ defmodule Bastille.Features.Api.RPC.ExtractKeysForSigning do
     if Mix.env() != :prod do
       handle_key_extraction(params)
     else
-      %{"error" => %{"code" => -32_601, "message" => "extract_keys_for_signing not available in production"}}
+      %{
+        "error" => %{
+          "code" => -32_601,
+          "message" => "extract_keys_for_signing not available in production"
+        }
+      }
     end
   end
 
@@ -37,11 +42,18 @@ defmodule Bastille.Features.Api.RPC.ExtractKeysForSigning do
             "step_3" => "Submit signed transaction"
           }
         }
+
       {:error, message} ->
         %{"error" => %{"code" => -32_602, "message" => "Key extraction failed: #{message}"}}
     end
   rescue
-    error -> %{"error" => %{"code" => -32_602, "message" => "Extract keys failed: #{Exception.message(error)}"}}
+    error ->
+      %{
+        "error" => %{
+          "code" => -32_602,
+          "message" => "Extract keys failed: #{Exception.message(error)}"
+        }
+      }
   end
 
   defp handle_key_extraction(_params) do

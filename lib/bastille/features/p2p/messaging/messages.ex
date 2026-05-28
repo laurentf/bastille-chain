@@ -5,7 +5,8 @@ defmodule Bastille.Features.P2P.Messaging.Messages do
   Based on Bitcoin protocol but adapted for Bastille blockchain.
   """
 
-  @type message_type :: :version | :verack | :inv | :getdata | :block | :tx | :addr | :ping | :pong | :getaddr
+  @type message_type ::
+          :version | :verack | :inv | :getdata | :block | :tx | :addr | :ping | :pong | :getaddr
 
   @doc """
   Create a version message.
@@ -13,23 +14,27 @@ defmodule Bastille.Features.P2P.Messaging.Messages do
   @spec version_message(keyword()) :: %{version: map()}
   def version_message(opts \\ []) do
     network = Application.get_env(:bastille, :network, :testnet)
-    %{version: %{
-      network: to_string(network),
-      magic: get_network_magic(network),
-      protocol_version: Keyword.get(opts, :protocol_version, 1),
-      services: Keyword.get(opts, :services, 1),  # 1 = full node
-      timestamp: Keyword.get(opts, :timestamp, System.system_time(:second)),
-      recv_services: Keyword.get(opts, :recv_services, 1),
-      recv_ip: Keyword.get(opts, :recv_ip, "127.0.0.1"),
-      recv_port: Keyword.get(opts, :recv_port, 8333),
-      from_services: Keyword.get(opts, :from_services, 1),
-      from_ip: Keyword.get(opts, :from_ip, "127.0.0.1"),
-      from_port: Keyword.get(opts, :from_port, 8333),
-      nonce: Keyword.get(opts, :nonce, :rand.uniform(0xFFFFFFFFFFFFFFFF)),
-      user_agent: Keyword.get(opts, :user_agent, "/Bastille:1.0.0/"),
-      start_height: Keyword.get(opts, :start_height, 0),
-      relay: Keyword.get(opts, :relay, true)
-    }}
+
+    %{
+      version: %{
+        network: to_string(network),
+        magic: get_network_magic(network),
+        protocol_version: Keyword.get(opts, :protocol_version, 1),
+        # 1 = full node
+        services: Keyword.get(opts, :services, 1),
+        timestamp: Keyword.get(opts, :timestamp, System.system_time(:second)),
+        recv_services: Keyword.get(opts, :recv_services, 1),
+        recv_ip: Keyword.get(opts, :recv_ip, "127.0.0.1"),
+        recv_port: Keyword.get(opts, :recv_port, 8333),
+        from_services: Keyword.get(opts, :from_services, 1),
+        from_ip: Keyword.get(opts, :from_ip, "127.0.0.1"),
+        from_port: Keyword.get(opts, :from_port, 8333),
+        nonce: Keyword.get(opts, :nonce, :rand.uniform(0xFFFFFFFFFFFFFFFF)),
+        user_agent: Keyword.get(opts, :user_agent, "/Bastille:1.0.0/"),
+        start_height: Keyword.get(opts, :start_height, 0),
+        relay: Keyword.get(opts, :relay, true)
+      }
+    }
   end
 
   @doc false
@@ -48,9 +53,12 @@ defmodule Bastille.Features.P2P.Messaging.Messages do
   """
   @spec inv_message([{:block | :tx, binary()}]) :: %{inv: list()}
   def inv_message(items) do
-    inv_items = Enum.map(items, fn {type, hash} ->
-      %{type: type, hash: hash}  # Keep hash as binary - no encoding!
-    end)
+    inv_items =
+      Enum.map(items, fn {type, hash} ->
+        # Keep hash as binary - no encoding!
+        %{type: type, hash: hash}
+      end)
+
     %{inv: inv_items}
   end
 
@@ -59,9 +67,12 @@ defmodule Bastille.Features.P2P.Messaging.Messages do
   """
   @spec getdata_message([{:block | :tx, binary()}]) :: %{getdata: list()}
   def getdata_message(items) do
-    getdata_items = Enum.map(items, fn {type, hash} ->
-      %{type: type, hash: hash}  # Keep hash as binary - no encoding!
-    end)
+    getdata_items =
+      Enum.map(items, fn {type, hash} ->
+        # Keep hash as binary - no encoding!
+        %{type: type, hash: hash}
+      end)
+
     %{getdata: getdata_items}
   end
 
@@ -70,11 +81,14 @@ defmodule Bastille.Features.P2P.Messaging.Messages do
   """
   @spec block_message(Bastille.Features.Block.Block.t()) :: %{block: map()}
   def block_message(%Bastille.Features.Block.Block{} = block) do
-    %{block: %{
-      hash: block.hash,  # Keep hash as binary - no encoding!
-      header: block.header,
-      transactions: block.transactions
-    }}
+    %{
+      block: %{
+        # Keep hash as binary - no encoding!
+        hash: block.hash,
+        header: block.header,
+        transactions: block.transactions
+      }
+    }
   end
 
   @doc """
@@ -82,17 +96,22 @@ defmodule Bastille.Features.P2P.Messaging.Messages do
   """
   @spec tx_message(Bastille.Features.Transaction.Transaction.t()) :: %{tx: map()}
   def tx_message(%Bastille.Features.Transaction.Transaction{} = tx) do
-    %{tx: %{
-      hash: tx.hash,  # Keep hash as binary - no encoding!
-      from: tx.from,
-      to: tx.to,
-      amount: tx.amount,
-      fee: tx.fee,
-      nonce: tx.nonce,
-      timestamp: tx.timestamp,
-      signature: tx.signature,
-      signature_type: tx.signature_type
-    }}
+    %{
+      tx: %{
+        # Keep hash as binary - no encoding!
+        hash: tx.hash,
+        from: tx.from,
+        to: tx.to,
+        amount: tx.amount,
+        fee: tx.fee,
+        nonce: tx.nonce,
+        timestamp: tx.timestamp,
+        # part of the signed message - must travel with the tx
+        data: tx.data,
+        signature: tx.signature,
+        signature_type: tx.signature_type
+      }
+    }
   end
 
   @doc """
@@ -100,14 +119,17 @@ defmodule Bastille.Features.P2P.Messaging.Messages do
   """
   @spec addr_message([{String.t(), integer()}]) :: %{addr: list()}
   def addr_message(addresses) do
-    addr_items = Enum.map(addresses, fn {ip, port} ->
-      %{
-        timestamp: System.system_time(:second),
-        services: 1,  # Full node
-        ip: ip,
-        port: port
-      }
-    end)
+    addr_items =
+      Enum.map(addresses, fn {ip, port} ->
+        %{
+          timestamp: System.system_time(:second),
+          # Full node
+          services: 1,
+          ip: ip,
+          port: port
+        }
+      end)
+
     %{addr: addr_items}
   end
 
@@ -163,12 +185,15 @@ defmodule Bastille.Features.P2P.Messaging.Messages do
   """
   @spec getheaders_message(integer(), integer()) :: %{getheaders: map()}
   def getheaders_message(start_height, stop_hash \\ 0) do
-    %{getheaders: %{
-      version: 1,
-      hash_count: 1,
-      block_locator_hashes: [start_height],  # Simplified: use height instead of hash
-      hash_stop: stop_hash
-    }}
+    %{
+      getheaders: %{
+        version: 1,
+        hash_count: 1,
+        # Simplified: use height instead of hash
+        block_locator_hashes: [start_height],
+        hash_stop: stop_hash
+      }
+    }
   end
 
   @doc """
@@ -176,10 +201,12 @@ defmodule Bastille.Features.P2P.Messaging.Messages do
   """
   @spec headers_message([map()]) :: %{headers: map()}
   def headers_message(headers) do
-    %{headers: %{
-      count: length(headers),
-      headers: headers
-    }}
+    %{
+      headers: %{
+        count: length(headers),
+        headers: headers
+      }
+    }
   end
 
   @doc """
@@ -187,12 +214,14 @@ defmodule Bastille.Features.P2P.Messaging.Messages do
   """
   @spec getblocks_message(integer(), integer(), integer()) :: %{getblocks: map()}
   def getblocks_message(start_height, stop_height, max_count \\ 500) do
-    %{getblocks: %{
-      version: 1,
-      start_height: start_height,
-      stop_height: stop_height,
-      max_count: max_count
-    }}
+    %{
+      getblocks: %{
+        version: 1,
+        start_height: start_height,
+        stop_height: stop_height,
+        max_count: max_count
+      }
+    }
   end
 
   @doc """
@@ -200,9 +229,11 @@ defmodule Bastille.Features.P2P.Messaging.Messages do
   """
   @spec height_message(integer()) :: %{height: map()}
   def height_message(current_height) do
-    %{height: %{
-      height: current_height,
-      timestamp: System.system_time(:second)
-    }}
+    %{
+      height: %{
+        height: current_height,
+        timestamp: System.system_time(:second)
+      }
+    }
   end
 end

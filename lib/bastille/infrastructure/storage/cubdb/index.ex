@@ -30,14 +30,14 @@ defmodule Bastille.Infrastructure.Storage.CubDB.Index do
     """
 
     @type t :: %__MODULE__{
-      tx_hash: binary(),
-      partition: String.t(),
-      block_hash: binary(),
-      from_address: String.t(),
-      to_address: String.t(),
-      tx_index: non_neg_integer(),
-      timestamp: integer()
-    }
+            tx_hash: binary(),
+            partition: String.t(),
+            block_hash: binary(),
+            from_address: String.t(),
+            to_address: String.t(),
+            tx_index: non_neg_integer(),
+            timestamp: integer()
+          }
 
     defstruct [
       :tx_hash,
@@ -51,10 +51,14 @@ defmodule Bastille.Infrastructure.Storage.CubDB.Index do
   end
 
   # Key namespaces (RocksDB column family simulation)
-  @tx_location_prefix "tx:"        # "tx:ABCD..." → {partition, block_hash, index}
-  @address_txs_prefix "addr:"      # "addr:1789ABC..." → [tx_hashes]
-  @block_partition_prefix "bhash:" # "bhash:ABCD..." → partition
-  @time_blocks_prefix "time:"      # "time:1641234567" → [block_hashes]
+  # "tx:ABCD..." → {partition, block_hash, index}
+  @tx_location_prefix "tx:"
+  # "addr:1789ABC..." → [tx_hashes]
+  @address_txs_prefix "addr:"
+  # "bhash:ABCD..." → partition
+  @block_partition_prefix "bhash:"
+  # "time:1641234567" → [block_hashes]
+  @time_blocks_prefix "time:"
 
   @doc """
   Start the index storage.
@@ -91,7 +95,8 @@ defmodule Bastille.Infrastructure.Storage.CubDB.Index do
   @doc """
   Find transaction location by hash.
   """
-  @spec find_transaction(binary()) :: {:ok, {String.t(), binary(), non_neg_integer()}} | {:error, :not_found}
+  @spec find_transaction(binary()) ::
+          {:ok, {String.t(), binary(), non_neg_integer()}} | {:error, :not_found}
   def find_transaction(tx_hash) do
     GenServer.call(__MODULE__, {:find_transaction, tx_hash})
   end
@@ -140,7 +145,9 @@ defmodule Bastille.Infrastructure.Storage.CubDB.Index do
 
   @impl true
   def init(opts) do
-    db_path = Keyword.get(opts, :db_path, Bastille.Infrastructure.Storage.CubDB.Paths.index_path())
+    db_path =
+      Keyword.get(opts, :db_path, Bastille.Infrastructure.Storage.CubDB.Paths.index_path())
+
     File.mkdir_p!(Path.dirname(db_path))
 
     {:ok, index_db} = CubDB.start_link(data_dir: db_path)
@@ -171,14 +178,19 @@ defmodule Bastille.Infrastructure.Storage.CubDB.Index do
     ]
 
     # Add address indexes (both from and to)
-    operations = operations ++
-      add_to_address_index(state.index_db, tx_idx.from_address, tx_idx.tx_hash) ++
-      add_to_address_index(state.index_db, tx_idx.to_address, tx_idx.tx_hash)
+    operations =
+      operations ++
+        add_to_address_index(state.index_db, tx_idx.from_address, tx_idx.tx_hash) ++
+        add_to_address_index(state.index_db, tx_idx.to_address, tx_idx.tx_hash)
 
     case batch_write(state.index_db, operations) do
       :ok ->
-        Logger.debug("📇 Indexed transaction: #{Base.encode16(tx_idx.tx_hash, case: :lower) |> String.slice(0, 16)}...")
+        Logger.debug(
+          "📇 Indexed transaction: #{Base.encode16(tx_idx.tx_hash, case: :lower) |> String.slice(0, 16)}..."
+        )
+
         {:reply, :ok, state}
+
       error ->
         {:reply, error, state}
     end
@@ -232,8 +244,9 @@ defmodule Bastille.Infrastructure.Storage.CubDB.Index do
     start_key = @time_blocks_prefix <> timestamp_to_key(start_time)
     end_key = @time_blocks_prefix <> timestamp_to_key(end_time)
 
-    blocks = CubDB.select(state.index_db, min_key: start_key, max_key: end_key)
-    |> Enum.map(fn {_key, block_hash} -> block_hash end)
+    blocks =
+      CubDB.select(state.index_db, min_key: start_key, max_key: end_key)
+      |> Enum.map(fn {_key, block_hash} -> block_hash end)
 
     {:reply, {:ok, blocks}, state}
   end
@@ -272,7 +285,8 @@ defmodule Bastille.Infrastructure.Storage.CubDB.Index do
     return_empty_if_genesis(address, fn ->
       key = @address_txs_prefix <> address
       existing_txs = CubDB.get(db, key) || []
-      updated_txs = [tx_hash | existing_txs] |> Enum.uniq() |> Enum.take(1000) # Limit to 1000 recent txs
+      # Limit to 1000 recent txs
+      updated_txs = [tx_hash | existing_txs] |> Enum.uniq() |> Enum.take(1000)
 
       [{:put, key, updated_txs}]
     end)

@@ -1,73 +1,65 @@
+//! Post-quantum signature NIFs for Bastille.
+//!
+//! Deterministic key derivation: every `*_keypair_from_seed` is a pure function
+//! of the 32-byte per-algorithm sub-seed (derived in Elixir from the mnemonic).
+//! No disk cache, no hidden OS entropy on the seeded paths — the same seed
+//! yields the same keypair on any machine.
+//!
+//!   - Dilithium2  → ML-DSA-44 (FIPS 204), seed = the 32-byte private key
+//!   - SPHINCS+128f → SLH-DSA-SHAKE-128f (FIPS 205), 32-byte seed expanded to 3x16
+//!   - Falcon512   → FN-DSA-512, 32-byte seed drives a ChaCha20 CSPRNG
+
 use rustler::{Binary, Env, NewBinary, NifResult};
-use pqcrypto_traits::sign::{PublicKey, SecretKey, DetachedSignature};
-use pqcrypto_dilithium::dilithium2;
-use pqcrypto_falcon::falcon512;
-use pqcrypto_sphincsplus::sphincsshake128fsimple as sphincsplus_shake_128f;
-use blake3;
-use std::collections::HashMap;
-use std::sync::Mutex;
-use std::fs;
-use std::path::Path;
 
-// Global cache for deterministic key generation (in-memory)
-lazy_static::lazy_static! {
-    static ref DETERMINISTIC_CACHE: Mutex<HashMap<Vec<u8>, (Vec<u8>, Vec<u8>)>> = Mutex::new(HashMap::new());
+use ml_dsa::{
+    B32, EncodedSignature, EncodedVerifyingKey, Keypair, MlDsa44, Signature as MlSignature,
+    SigningKey as MlSigningKey, VerifyingKey as MlVerifyingKey,
+};
+use slh_dsa::{
+    Shake128f, Signature as SlhSignature, SigningKey as SlhSigningKey,
+    VerifyingKey as SlhVerifyingKey,
+};
+use slh_dsa::signature::{Signer as SlhSigner, Verifier as SlhVerifier};
+
+use fn_dsa::{
+    DOMAIN_NONE, FN_DSA_LOGN_512, HASH_ID_RAW, KeyPairGenerator, KeyPairGeneratorStandard,
+    SigningKey as FnSigningKey, SigningKeyStandard, VerifyingKey as FnVerifyingKey,
+    VerifyingKeyStandard, sign_key_size, signature_size, vrfy_key_size,
+};
+use rand::RngCore;
+use rand::rngs::OsRng;
+use rand_chacha::ChaCha20Rng;
+use rand_chacha::rand_core::SeedableRng;
+
+// === helpers ===
+
+fn to_bin<'a>(env: Env<'a>, data: &[u8]) -> Binary<'a> {
+    let mut bin = NewBinary::new(env, data.len());
+    bin.copy_from_slice(data);
+    bin.into()
 }
 
-// Get cache directory path (environment-aware)
-fn get_cache_dir() -> String {
-    // Use same storage base as the rest of the application
-    std::env::var("BASTILLE_STORAGE_BASE_PATH")
-        .unwrap_or_else(|_| "data/test".to_string()) + "/key_cache"
+fn random_bytes<const N: usize>() -> [u8; N] {
+    let mut buf = [0u8; N];
+    OsRng.fill_bytes(&mut buf);
+    buf
 }
 
-// Load persistent cache on startup
-fn load_persistent_cache(cache_key: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
-    let cache_dir = get_cache_dir();
-    if !Path::new(&cache_dir).exists() {
-        return None;
-    }
-    
-    let cache_file = format!("{}/{}.keypair", cache_dir, hex::encode(cache_key));
-    if let Ok(data) = fs::read(&cache_file) {
-        // Simple format: [pk_len:4][pk_data][sk_data]
-        if data.len() >= 4 {
-            let pk_len = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
-            if data.len() >= 4 + pk_len {
-                let pk_data = data[4..4+pk_len].to_vec();
-                let sk_data = data[4+pk_len..].to_vec();
-                return Some((pk_data, sk_data));
-            }
-        }
-    }
-    None
+/// Expand an arbitrary-length sub-seed to 48 bytes (3 SLH-DSA n=16 seeds).
+fn expand_48(seed: &[u8]) -> [u8; 48] {
+    let mut h = blake3::Hasher::new();
+    h.update(b"bastille-slh-dsa-v1");
+    h.update(seed);
+    let mut out = [0u8; 48];
+    h.finalize_xof().fill(&mut out);
+    out
 }
 
-// Save to persistent cache
-fn save_persistent_cache(cache_key: &[u8], pk_bytes: &[u8], sk_bytes: &[u8]) -> Result<(), String> {
-    let cache_dir = get_cache_dir();
-    if let Err(e) = fs::create_dir_all(&cache_dir) {
-        return Err(format!("Failed to create cache directory '{}': {}", cache_dir, e));
-    }
-    
-    let cache_file = format!("{}/{}.keypair", cache_dir, hex::encode(cache_key));
-    let mut data = Vec::new();
-    data.extend_from_slice(&(pk_bytes.len() as u32).to_le_bytes());
-    data.extend_from_slice(pk_bytes);
-    data.extend_from_slice(sk_bytes);
-    
-    if let Err(e) = fs::write(&cache_file, data) {
-        return Err(format!("Failed to write crypto cache '{}': {}", &cache_file, e));
-    }
-    
-    Ok(())
+fn seed32(seed: &[u8]) -> NifResult<[u8; 32]> {
+    seed.try_into().map_err(|_| rustler::Error::BadArg)
 }
 
-// Load resources function
-rustler::atoms! {
-    ok,
-    error,
-}
+// === status ===
 
 #[rustler::nif]
 fn nifs_loaded() -> bool {
@@ -83,266 +75,134 @@ fn get_algorithm_info() -> Vec<String> {
     ]
 }
 
-// === Dilithium Functions ===
+// === Dilithium2 / ML-DSA-44 ===
+// Private key = the 32-byte seed (ML-DSA's canonical FIPS private-key form).
 
 #[rustler::nif]
 fn dilithium2_keypair<'a>(env: Env<'a>) -> NifResult<(Binary<'a>, Binary<'a>)> {
-    let (pk, sk) = dilithium2::keypair();
-    
-    let mut pk_binary = NewBinary::new(env, pk.as_bytes().len());
-    pk_binary.copy_from_slice(pk.as_bytes());
-    
-    let mut sk_binary = NewBinary::new(env, sk.as_bytes().len());
-    sk_binary.copy_from_slice(sk.as_bytes());
-    
-    Ok((pk_binary.into(), sk_binary.into()))
+    dilithium2_from_seed_bytes(env, &random_bytes::<32>())
+}
+
+#[rustler::nif]
+fn dilithium2_keypair_from_seed<'a>(env: Env<'a>, seed: Binary) -> NifResult<(Binary<'a>, Binary<'a>)> {
+    dilithium2_from_seed_bytes(env, &seed32(seed.as_slice())?)
+}
+
+fn dilithium2_from_seed_bytes<'a>(env: Env<'a>, seed: &[u8; 32]) -> NifResult<(Binary<'a>, Binary<'a>)> {
+    let sk = MlSigningKey::<MlDsa44>::from_seed(&B32::from(*seed));
+    let pk = sk.verifying_key().encode();
+    Ok((to_bin(env, &pk[..]), to_bin(env, seed)))
 }
 
 #[rustler::nif]
 fn dilithium2_sign<'a>(env: Env<'a>, message: Binary, private_key: Binary) -> NifResult<Binary<'a>> {
-    match dilithium2::SecretKey::from_bytes(&private_key) {
-        Ok(sk) => {
-            let signature = dilithium2::detached_sign(&message, &sk);
-            let sig_bytes = signature.as_bytes();
-            
-            let mut sig_binary = NewBinary::new(env, sig_bytes.len());
-            sig_binary.copy_from_slice(sig_bytes);
-            
-            Ok(sig_binary.into())
-        }
-        Err(_) => Err(rustler::Error::BadArg)
-    }
+    let seed = seed32(private_key.as_slice())?;
+    let sk = MlSigningKey::<MlDsa44>::from_seed(&B32::from(seed));
+    let sig = sk
+        .expanded_key()
+        .sign_deterministic(message.as_slice(), b"")
+        .map_err(|_| rustler::Error::BadArg)?;
+    Ok(to_bin(env, &sig.encode()[..]))
 }
 
 #[rustler::nif]
 fn dilithium2_verify(signature: Binary, message: Binary, public_key: Binary) -> bool {
-    match (
-        dilithium2::DetachedSignature::from_bytes(&signature),
-        dilithium2::PublicKey::from_bytes(&public_key)
-    ) {
-        (Ok(sig), Ok(pk)) => {
-            dilithium2::verify_detached_signature(&sig, &message, &pk).is_ok()
-        }
-        _ => false
-    }
+    let Ok(vk_enc) = EncodedVerifyingKey::<MlDsa44>::try_from(public_key.as_slice()) else {
+        return false;
+    };
+    let vk = MlVerifyingKey::<MlDsa44>::decode(&vk_enc);
+    let Ok(sig_enc) = EncodedSignature::<MlDsa44>::try_from(signature.as_slice()) else {
+        return false;
+    };
+    let Some(sig) = MlSignature::<MlDsa44>::decode(&sig_enc) else {
+        return false;
+    };
+    vk.verify_with_context(message.as_slice(), b"", &sig)
 }
 
-// === Falcon Functions ===
+// === Falcon512 / FN-DSA-512 ===
+// Private key = 1281-byte fn-dsa signing key; signatures are randomized.
 
 #[rustler::nif]
 fn falcon512_keypair<'a>(env: Env<'a>) -> NifResult<(Binary<'a>, Binary<'a>)> {
-    let (pk, sk) = falcon512::keypair();
-    
-    let mut pk_binary = NewBinary::new(env, pk.as_bytes().len());
-    pk_binary.copy_from_slice(pk.as_bytes());
-    
-    let mut sk_binary = NewBinary::new(env, sk.as_bytes().len());
-    sk_binary.copy_from_slice(sk.as_bytes());
-    
-    Ok((pk_binary.into(), sk_binary.into()))
-}
-
-#[rustler::nif]
-fn falcon512_sign<'a>(env: Env<'a>, message: Binary, private_key: Binary) -> NifResult<Binary<'a>> {
-    match falcon512::SecretKey::from_bytes(&private_key) {
-        Ok(sk) => {
-            let signature = falcon512::detached_sign(&message, &sk);
-            let sig_bytes = signature.as_bytes();
-            
-            let mut sig_binary = NewBinary::new(env, sig_bytes.len());
-            sig_binary.copy_from_slice(sig_bytes);
-            
-            Ok(sig_binary.into())
-        }
-        Err(_) => Err(rustler::Error::BadArg)
-    }
-}
-
-#[rustler::nif]
-fn falcon512_verify(signature: Binary, message: Binary, public_key: Binary) -> bool {
-    match (
-        falcon512::DetachedSignature::from_bytes(&signature),
-        falcon512::PublicKey::from_bytes(&public_key)
-    ) {
-        (Ok(sig), Ok(pk)) => {
-            falcon512::verify_detached_signature(&sig, &message, &pk).is_ok()
-        }
-        _ => false
-    }
-}
-
-// === SPHINCS+ Functions ===
-
-#[rustler::nif]
-fn sphincsplus_shake_128f_keypair<'a>(env: Env<'a>) -> NifResult<(Binary<'a>, Binary<'a>)> {
-    let (pk, sk) = sphincsplus_shake_128f::keypair();
-    
-    let mut pk_binary = NewBinary::new(env, pk.as_bytes().len());
-    pk_binary.copy_from_slice(pk.as_bytes());
-    
-    let mut sk_binary = NewBinary::new(env, sk.as_bytes().len());
-    sk_binary.copy_from_slice(sk.as_bytes());
-    
-    Ok((pk_binary.into(), sk_binary.into()))
-}
-
-#[rustler::nif]
-fn sphincsplus_shake_128f_sign<'a>(env: Env<'a>, message: Binary, private_key: Binary) -> NifResult<Binary<'a>> {
-    match sphincsplus_shake_128f::SecretKey::from_bytes(&private_key) {
-        Ok(sk) => {
-            let signature = sphincsplus_shake_128f::detached_sign(&message, &sk);
-            let sig_bytes = signature.as_bytes();
-            
-            let mut sig_binary = NewBinary::new(env, sig_bytes.len());
-            sig_binary.copy_from_slice(sig_bytes);
-            
-            Ok(sig_binary.into())
-        }
-        Err(_) => Err(rustler::Error::BadArg)
-    }
-}
-
-#[rustler::nif]
-fn sphincsplus_shake_128f_verify(signature: Binary, message: Binary, public_key: Binary) -> bool {
-    match (
-        sphincsplus_shake_128f::DetachedSignature::from_bytes(&signature),
-        sphincsplus_shake_128f::PublicKey::from_bytes(&public_key)
-    ) {
-        (Ok(sig), Ok(pk)) => {
-            sphincsplus_shake_128f::verify_detached_signature(&sig, &message, &pk).is_ok()
-        }
-        _ => false
-    }
-}
-
-// === Blake3 Hash Function ===
-
-#[rustler::nif]
-fn blake3_hash<'a>(env: Env<'a>, data: Binary) -> NifResult<Binary<'a>> {
-    let hash = blake3::hash(&data);
-    let hash_bytes = hash.as_bytes();
-    
-    let mut result_binary = NewBinary::new(env, hash_bytes.len());
-    result_binary.copy_from_slice(hash_bytes);
-    
-    Ok(result_binary.into())
-}
-
-// === Deterministic Key Generation Functions ===
-
-#[rustler::nif]
-fn dilithium2_keypair_from_seed<'a>(env: Env<'a>, seed: Binary) -> NifResult<(Binary<'a>, Binary<'a>)> {
-    // Create cache key for this seed+algorithm combination
-    let mut cache_key = Vec::new();
-    cache_key.extend_from_slice(b"dilithium2_v1:");
-    cache_key.extend_from_slice(seed.as_slice());
-    let cache_key_hash = blake3::hash(&cache_key);
-    let cache_key_bytes = cache_key_hash.as_bytes().to_vec();
-    
-    // Check persistent cache first
-    if let Some((pk_bytes, sk_bytes)) = load_persistent_cache(&cache_key_bytes) {
-        let mut pk_binary = NewBinary::new(env, pk_bytes.len());
-        pk_binary.copy_from_slice(&pk_bytes);
-        
-        let mut sk_binary = NewBinary::new(env, sk_bytes.len());
-        sk_binary.copy_from_slice(&sk_bytes);
-        
-        return Ok((pk_binary.into(), sk_binary.into()));
-    }
-    
-    // Generate random keypair (deterministic via persistent caching)
-    let (pk, sk) = dilithium2::keypair();
-    let pk_bytes = pk.as_bytes().to_vec();
-    let sk_bytes = sk.as_bytes().to_vec();
-    
-    // Save to persistent cache for true determinism across restarts
-    save_persistent_cache(&cache_key_bytes, &pk_bytes, &sk_bytes)
-        .map_err(|e| rustler::Error::Term(Box::new(format!("Critical cache failure: {}", e))))?;
-    
-    let mut pk_binary = NewBinary::new(env, pk_bytes.len());
-    pk_binary.copy_from_slice(&pk_bytes);
-    
-    let mut sk_binary = NewBinary::new(env, sk_bytes.len());
-    sk_binary.copy_from_slice(&sk_bytes);
-    
-    Ok((pk_binary.into(), sk_binary.into()))
+    let mut rng = OsRng;
+    let mut sk = vec![0u8; sign_key_size(FN_DSA_LOGN_512)];
+    let mut vk = vec![0u8; vrfy_key_size(FN_DSA_LOGN_512)];
+    KeyPairGeneratorStandard::default().keygen(FN_DSA_LOGN_512, &mut rng, &mut sk, &mut vk);
+    Ok((to_bin(env, &vk), to_bin(env, &sk)))
 }
 
 #[rustler::nif]
 fn falcon512_keypair_from_seed<'a>(env: Env<'a>, seed: Binary) -> NifResult<(Binary<'a>, Binary<'a>)> {
-    // Create cache key for this seed+algorithm combination
-    let mut cache_key = Vec::new();
-    cache_key.extend_from_slice(b"falcon512_v1:");
-    cache_key.extend_from_slice(seed.as_slice());
-    let cache_key_hash = blake3::hash(&cache_key);
-    let cache_key_bytes = cache_key_hash.as_bytes().to_vec();
-    
-    // Check persistent cache first
-    if let Some((pk_bytes, sk_bytes)) = load_persistent_cache(&cache_key_bytes) {
-        let mut pk_binary = NewBinary::new(env, pk_bytes.len());
-        pk_binary.copy_from_slice(&pk_bytes);
-        
-        let mut sk_binary = NewBinary::new(env, sk_bytes.len());
-        sk_binary.copy_from_slice(&sk_bytes);
-        
-        return Ok((pk_binary.into(), sk_binary.into()));
+    let mut rng = ChaCha20Rng::from_seed(seed32(seed.as_slice())?);
+    let mut sk = vec![0u8; sign_key_size(FN_DSA_LOGN_512)];
+    let mut vk = vec![0u8; vrfy_key_size(FN_DSA_LOGN_512)];
+    KeyPairGeneratorStandard::default().keygen(FN_DSA_LOGN_512, &mut rng, &mut sk, &mut vk);
+    Ok((to_bin(env, &vk), to_bin(env, &sk)))
+}
+
+#[rustler::nif]
+fn falcon512_sign<'a>(env: Env<'a>, message: Binary, private_key: Binary) -> NifResult<Binary<'a>> {
+    let mut sk =
+        SigningKeyStandard::decode(private_key.as_slice()).ok_or(rustler::Error::BadArg)?;
+    let mut sig = vec![0u8; signature_size(FN_DSA_LOGN_512)];
+    let mut rng = OsRng;
+    sk.sign(&mut rng, &DOMAIN_NONE, &HASH_ID_RAW, message.as_slice(), &mut sig);
+    Ok(to_bin(env, &sig))
+}
+
+#[rustler::nif]
+fn falcon512_verify(signature: Binary, message: Binary, public_key: Binary) -> bool {
+    match VerifyingKeyStandard::decode(public_key.as_slice()) {
+        Some(vk) => vk.verify(signature.as_slice(), &DOMAIN_NONE, &HASH_ID_RAW, message.as_slice()),
+        None => false,
     }
-    
-    // Generate random keypair (deterministic via persistent caching)
-    let (pk, sk) = falcon512::keypair();
-    let pk_bytes = pk.as_bytes().to_vec();
-    let sk_bytes = sk.as_bytes().to_vec();
-    
-    // Save to persistent cache for true determinism across restarts
-    save_persistent_cache(&cache_key_bytes, &pk_bytes, &sk_bytes)
-        .map_err(|e| rustler::Error::Term(Box::new(format!("Critical cache failure: {}", e))))?;
-    
-    let mut pk_binary = NewBinary::new(env, pk_bytes.len());
-    pk_binary.copy_from_slice(&pk_bytes);
-    
-    let mut sk_binary = NewBinary::new(env, sk_bytes.len());
-    sk_binary.copy_from_slice(&sk_bytes);
-    
-    Ok((pk_binary.into(), sk_binary.into()))
+}
+
+// === SPHINCS+ / SLH-DSA-SHAKE-128f ===
+// Private key = 64-byte SLH-DSA signing key; deterministic signing.
+
+#[rustler::nif]
+fn sphincsplus_shake_128f_keypair<'a>(env: Env<'a>) -> NifResult<(Binary<'a>, Binary<'a>)> {
+    sphincs_from_seed48(env, &random_bytes::<48>())
 }
 
 #[rustler::nif]
 fn sphincsplus_keypair_from_seed<'a>(env: Env<'a>, seed: Binary) -> NifResult<(Binary<'a>, Binary<'a>)> {
-    // Create cache key for this seed+algorithm combination
-    let mut cache_key = Vec::new();
-    cache_key.extend_from_slice(b"sphincsplus_v1:");
-    cache_key.extend_from_slice(seed.as_slice());
-    let cache_key_hash = blake3::hash(&cache_key);
-    let cache_key_bytes = cache_key_hash.as_bytes().to_vec();
-    
-    // Check persistent cache first
-    if let Some((pk_bytes, sk_bytes)) = load_persistent_cache(&cache_key_bytes) {
-        let mut pk_binary = NewBinary::new(env, pk_bytes.len());
-        pk_binary.copy_from_slice(&pk_bytes);
-        
-        let mut sk_binary = NewBinary::new(env, sk_bytes.len());
-        sk_binary.copy_from_slice(&sk_bytes);
-        
-        return Ok((pk_binary.into(), sk_binary.into()));
-    }
-    
-    // Generate random keypair (deterministic via persistent caching)
-    let (pk, sk) = sphincsplus_shake_128f::keypair();
-    let pk_bytes = pk.as_bytes().to_vec();
-    let sk_bytes = sk.as_bytes().to_vec();
-    
-    // Save to persistent cache for true determinism across restarts
-    save_persistent_cache(&cache_key_bytes, &pk_bytes, &sk_bytes)
-        .map_err(|e| rustler::Error::Term(Box::new(format!("Critical cache failure: {}", e))))?;
-    
-    let mut pk_binary = NewBinary::new(env, pk_bytes.len());
-    pk_binary.copy_from_slice(&pk_bytes);
-    
-    let mut sk_binary = NewBinary::new(env, sk_bytes.len());
-    sk_binary.copy_from_slice(&sk_bytes);
-    
-    Ok((pk_binary.into(), sk_binary.into()))
+    sphincs_from_seed48(env, &expand_48(seed.as_slice()))
 }
 
-// Register NIFs with the Elixir module name that mirrors the file location
+fn sphincs_from_seed48<'a>(env: Env<'a>, s: &[u8; 48]) -> NifResult<(Binary<'a>, Binary<'a>)> {
+    let sk = SlhSigningKey::<Shake128f>::slh_keygen_internal(&s[0..16], &s[16..32], &s[32..48]);
+    let vk: &SlhVerifyingKey<Shake128f> = sk.as_ref();
+    Ok((to_bin(env, &vk.to_bytes()[..]), to_bin(env, &sk.to_bytes()[..])))
+}
+
+#[rustler::nif]
+fn sphincsplus_shake_128f_sign<'a>(env: Env<'a>, message: Binary, private_key: Binary) -> NifResult<Binary<'a>> {
+    let sk = SlhSigningKey::<Shake128f>::try_from(private_key.as_slice())
+        .map_err(|_| rustler::Error::BadArg)?;
+    let sig = SlhSigner::try_sign(&sk, message.as_slice()).map_err(|_| rustler::Error::BadArg)?;
+    Ok(to_bin(env, &sig.to_bytes()[..]))
+}
+
+#[rustler::nif]
+fn sphincsplus_shake_128f_verify(signature: Binary, message: Binary, public_key: Binary) -> bool {
+    let (Ok(vk), Ok(sig)) = (
+        SlhVerifyingKey::<Shake128f>::try_from(public_key.as_slice()),
+        SlhSignature::<Shake128f>::try_from(signature.as_slice()),
+    ) else {
+        return false;
+    };
+    SlhVerifier::verify(&vk, message.as_slice(), &sig).is_ok()
+}
+
+// === Blake3 ===
+
+#[rustler::nif]
+fn blake3_hash<'a>(env: Env<'a>, data: Binary) -> NifResult<Binary<'a>> {
+    let hash = blake3::hash(data.as_slice());
+    Ok(to_bin(env, hash.as_bytes()))
+}
+
 rustler::init!("Elixir.Bastille.Infrastructure.Crypto.CryptoNif");

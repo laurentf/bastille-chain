@@ -18,25 +18,33 @@ defmodule Bastille.Shared.Constants do
   # ===== DECIMAL SYSTEM =====
   # Bastille Day decimal system - 14 decimals for July 14th!
   @decimals 14
-  @juillet_per_bast 100_000_000_000_000  # 10^14
+  # 10^14
+  @juillet_per_bast 100_000_000_000_000
 
   # ===== BLOCK REWARDS =====
   # Fixed block reward (no halving, utility token model)
-  @fixed_block_reward_bast 1789  # 1789 BAST per block (Revolution year!)
+  # 1789 BAST per block (Revolution year!)
+  @fixed_block_reward_bast 1789
   @fixed_block_reward_juillet @fixed_block_reward_bast * @juillet_per_bast
 
   # ===== SUPPLY ECONOMICS =====
-  @max_supply :infinite  # No maximum supply (like DOGE)
-  @initial_supply_bast 1789.0  # 1789 BAST genesis supply (1 block reward worth)
+  # No maximum supply (like DOGE)
+  @max_supply :infinite
+  # 1789 BAST genesis supply (1 block reward worth)
+  @initial_supply_bast 1789.0
   @initial_supply_juillet @initial_supply_bast * @juillet_per_bast
 
   # ===== GENESIS ECONOMICS =====
-  @genesis_address_prefix "1789"  # Production/mainnet address prefix
-  @genesis_timestamp 1_752_422_400  # July 14, 2025 at midnight UTC
+  # Production/mainnet address prefix
+  @genesis_address_prefix "1789"
+  # July 14, 2025 at midnight UTC
+  @genesis_timestamp 1_752_422_400
 
   # ===== FEE ECONOMICS =====
-  @min_transaction_fee_juillet 1  # 1 juillet minimum
-  @default_fee_rate 0.001  # 0.1% default fee rate
+  # 1 juillet minimum
+  @min_transaction_fee_juillet 1
+  # 0.1% default fee rate
+  @default_fee_rate 0.001
 
   # ===== PUBLIC API =====
 
@@ -113,7 +121,7 @@ defmodule Bastille.Shared.Constants do
   Formula: initial_supply + (block_height * block_reward)
   """
   def total_supply_at_block(block_height) when is_integer(block_height) and block_height >= 0 do
-    @initial_supply_juillet + (block_height * @fixed_block_reward_juillet)
+    @initial_supply_juillet + block_height * @fixed_block_reward_juillet
   end
 
   @doc """
@@ -136,5 +144,7 @@ defmodule Bastille.Shared.Constants do
     current_supply = total_supply_at_block(block_height)
     annual_new_supply / current_supply
   end
-  def annual_inflation_rate(0), do: :infinite  # Genesis case
+
+  # Genesis case
+  def annual_inflation_rate(0), do: :infinite
 end

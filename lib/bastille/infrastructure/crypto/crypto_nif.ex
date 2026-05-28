@@ -84,7 +84,8 @@ defmodule Bastille.Infrastructure.Crypto.CryptoNif do
   @doc """
   Verify a SPHINCS+-SHAKE-128f signature.
   """
-  def sphincsplus_shake_128f_verify(_signature, _message, _public_key), do: :erlang.nif_error(:nif_not_loaded)
+  def sphincsplus_shake_128f_verify(_signature, _message, _public_key),
+    do: :erlang.nif_error(:nif_not_loaded)
 
   # === Blake3 Hash ===
 

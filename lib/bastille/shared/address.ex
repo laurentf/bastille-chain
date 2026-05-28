@@ -113,12 +113,10 @@ defmodule Bastille.Shared.Address do
     prefix = get_prefix()
     expected_length = get_address_length()
 
-    cond do
-      String.length(address) == expected_length and String.starts_with?(address, prefix) ->
-        String.downcase(address)
-
-      true ->
-        address
+    if String.length(address) == expected_length and String.starts_with?(address, prefix) do
+      String.downcase(address)
+    else
+      address
     end
   end
 
@@ -199,7 +197,7 @@ defmodule Bastille.Shared.Address do
     cond do
       all_lowercase_hex?(hex_part) -> true
       all_uppercase_hex?(hex_part) -> true
-      true -> (prefix <> hex_part) == with_checksum(prefix <> String.downcase(hex_part))
+      true -> prefix <> hex_part == with_checksum(prefix <> String.downcase(hex_part))
     end
   end
 
@@ -235,8 +233,7 @@ defmodule Bastille.Shared.Address do
     hex_part
     |> String.graphemes()
     |> Enum.with_index()
-    |> Enum.map(fn {char, i} -> maybe_uppercase(char, String.at(hash_hex, i)) end)
-    |> Enum.join()
+    |> Enum.map_join("", fn {char, i} -> maybe_uppercase(char, String.at(hash_hex, i)) end)
   end
 
   # Hex char at position i:
@@ -244,6 +241,7 @@ defmodule Bastille.Shared.Address do
   #   - a-f and the corresponding hash nibble ≥ 8 → uppercase
   #   - a-f and the corresponding hash nibble < 8 → lowercase
   defp maybe_uppercase(char, _hash_char) when char in ~w(0 1 2 3 4 5 6 7 8 9), do: char
+
   defp maybe_uppercase(char, hash_char) when char in ~w(a b c d e f) do
     case hash_char in ~w(8 9 a b c d e f) do
       true -> String.upcase(char)

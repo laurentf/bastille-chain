@@ -25,27 +25,36 @@ defmodule Bastille.Features.P2P.Synchronization.Sync do
   # @max_sync_peers 3         # Max peers to sync from simultaneously
 
   defstruct [
-    :local_height,           # Current local blockchain height
-    :target_height,          # Target height from peers
-    :sync_state,             # :idle, :syncing, :catching_up
-    :sync_peers,             # Map of peer_id => peer_info
-    :pending_blocks,         # Map of height => block_hash
-    :downloading_ranges,     # Currently downloading block ranges
-    :last_sync_time,         # Timestamp of last successful sync
-    :sync_stats,             # Statistics for monitoring
-    requested_blocks: MapSet.new() # Track requested block hashes
+    # Current local blockchain height
+    :local_height,
+    # Target height from peers
+    :target_height,
+    # :idle, :syncing, :catching_up
+    :sync_state,
+    # Map of peer_id => peer_info
+    :sync_peers,
+    # Map of height => block_hash
+    :pending_blocks,
+    # Currently downloading block ranges
+    :downloading_ranges,
+    # Timestamp of last successful sync
+    :last_sync_time,
+    # Statistics for monitoring
+    :sync_stats,
+    # Track requested block hashes
+    requested_blocks: MapSet.new()
   ]
 
   @type t :: %__MODULE__{
-    local_height: integer(),
-    target_height: integer(),
-    sync_state: :idle | :syncing | :catching_up,
-    sync_peers: map(),
-    pending_blocks: map(),
-    downloading_ranges: list(),
-    last_sync_time: integer(),
-    sync_stats: map()
-  }
+          local_height: integer(),
+          target_height: integer(),
+          sync_state: :idle | :syncing | :catching_up,
+          sync_peers: map(),
+          pending_blocks: map(),
+          downloading_ranges: list(),
+          last_sync_time: integer(),
+          sync_stats: map()
+        }
 
   # Client API
 
@@ -93,7 +102,8 @@ defmodule Bastille.Features.P2P.Synchronization.Sync do
   Build headers to reply to a getheaders request starting from a given height.
   """
   @spec handle_getheaders_request(non_neg_integer()) :: [map()]
-  def handle_getheaders_request(start_height) when is_integer(start_height) and start_height >= 0 do
+  def handle_getheaders_request(start_height)
+      when is_integer(start_height) and start_height >= 0 do
     local_height = safe_get_height()
     end_height = min(local_height, start_height + 200)
     build_headers_range(start_height + 1, end_height)
@@ -109,25 +119,38 @@ defmodule Bastille.Features.P2P.Synchronization.Sync do
         {:ok, header_map} ->
           index = Map.get(header_map, :index) || Map.get(header_map, "index")
           hash = Map.get(header_map, :hash) || Map.get(header_map, "hash")
+
           req_hash =
             cond do
-              is_binary(hash) -> hash
+              is_binary(hash) ->
+                hash
+
               is_integer(index) ->
                 case Bastille.Features.Chain.Chain.get_block_hash_at_height(index) do
                   {:ok, h} -> h
                   _ -> nil
                 end
-              true -> nil
+
+              true ->
+                nil
             end
 
           if is_binary(req_hash) do
             # Avoid re-entrancy: use cast to Node via its message loop
-            GenServer.cast(Bastille.Features.P2P.PeerManagement.Node, {:send_to_peer_async, peer_id, :getdata, Messages.getdata_message([{:block, req_hash}])[:getdata]})
+            GenServer.cast(
+              Bastille.Features.P2P.PeerManagement.Node,
+              {:send_to_peer_async, peer_id, :getdata,
+               Messages.getdata_message([{:block, req_hash}])[:getdata]}
+            )
+
             GenServer.cast(__MODULE__, {:track_requested_block, req_hash})
           end
-        _ -> :ok
+
+        _ ->
+          :ok
       end
     end)
+
     :ok
   end
 
@@ -194,10 +217,17 @@ defmodule Bastille.Features.P2P.Synchronization.Sync do
 
   def handle_cast({:request_parent_if_needed, peer_id, parent_hash}, state) do
     cond do
-      not is_binary(parent_hash) -> {:noreply, state}
-      MapSet.member?(state.requested_blocks, parent_hash) -> {:noreply, state}
+      not is_binary(parent_hash) ->
+        {:noreply, state}
+
+      MapSet.member?(state.requested_blocks, parent_hash) ->
+        {:noreply, state}
+
       true ->
-        Logger.info("🧩 Requesting parent block #{Base.encode16(parent_hash, case: :lower) |> String.slice(0, 12)}")
+        Logger.info(
+          "🧩 Requesting parent block #{Base.encode16(parent_hash, case: :lower) |> String.slice(0, 12)}"
+        )
+
         getdata_msg = Messages.getdata_message([{:block, parent_hash}])
         _ = Node.send_to_peer(peer_id, :getdata, getdata_msg[:getdata])
         {:noreply, %{state | requested_blocks: MapSet.put(state.requested_blocks, parent_hash)}}
@@ -215,6 +245,7 @@ defmodule Bastille.Features.P2P.Synchronization.Sync do
       pending_blocks: map_size(state.pending_blocks),
       stats: state.sync_stats
     }
+
     {:reply, status, state}
   end
 
@@ -245,19 +276,23 @@ defmodule Bastille.Features.P2P.Synchronization.Sync do
     Logger.debug("📏 Peer #{peer_id} height: #{peer_height}, local: #{state.local_height}")
 
     # Update peer info
-    updated_peers = Map.put(state.sync_peers, peer_id, %{
-      peer_id: peer_id,
-      height: peer_height,
-      last_seen: System.system_time(:second)
-    })
+    updated_peers =
+      Map.put(state.sync_peers, peer_id, %{
+        peer_id: peer_id,
+        height: peer_height,
+        last_seen: System.system_time(:second)
+      })
 
     # Check if we need to sync
     if peer_height > state.local_height + 1 do
-      Logger.info("🔄 Peer #{peer_id} is ahead (#{peer_height} vs #{state.local_height}), starting sync...")
+      Logger.info(
+        "🔄 Peer #{peer_id} is ahead (#{peer_height} vs #{state.local_height}), starting sync..."
+      )
 
-      new_state = %{state |
-        sync_peers: updated_peers,
-        target_height: max(state.target_height, peer_height)
+      new_state = %{
+        state
+        | sync_peers: updated_peers,
+          target_height: max(state.target_height, peer_height)
       }
 
       # Start sync if not already syncing
@@ -281,12 +316,15 @@ defmodule Bastille.Features.P2P.Synchronization.Sync do
       true ->
         Logger.warning("⚠️ No sync-capable peers available")
         %{state | sync_state: :idle}
+
       false ->
         Logger.info("🔗 Found #{length(sync_peers)} sync-capable peers")
         request_headers_from_peers(sync_peers)
-        %{state |
-          sync_state: :syncing,
-          sync_peers: Enum.into(sync_peers, %{}, fn peer -> {peer.peer_id, peer} end)
+
+        %{
+          state
+          | sync_state: :syncing,
+            sync_peers: Enum.into(sync_peers, %{}, fn peer -> {peer.peer_id, peer} end)
         }
     end
   end
@@ -298,20 +336,30 @@ defmodule Bastille.Features.P2P.Synchronization.Sync do
     local_height = safe_get_height()
 
     # Check if any peer has higher height
-    max_peer_height = peers
-    |> Enum.map(fn peer -> get_peer_height(peer) end)
-    |> Enum.max(fn -> local_height end)
+    max_peer_height =
+      peers
+      |> Enum.map(fn peer -> get_peer_height(peer) end)
+      |> Enum.max(fn -> local_height end)
 
     case {max_peer_height > local_height and state.sync_state == :idle,
           state.sync_state != :idle and local_height >= state.target_height} do
       {true, _} ->
-        Logger.info("📈 Peer has higher height (#{max_peer_height} vs #{local_height}), starting sync...")
+        Logger.info(
+          "📈 Peer has higher height (#{max_peer_height} vs #{local_height}), starting sync..."
+        )
+
         start_initial_sync(%{state | target_height: max_peer_height, local_height: local_height})
+
       {_, true} ->
         Logger.info("✅ Synced; now processing normally incoming blocks")
         %{state | sync_state: :idle, local_height: local_height, target_height: local_height}
+
       _ ->
-        %{state | local_height: local_height, target_height: max(state.target_height, max_peer_height)}
+        %{
+          state
+          | local_height: local_height,
+            target_height: max(state.target_height, max_peer_height)
+        }
     end
   end
 
@@ -319,8 +367,8 @@ defmodule Bastille.Features.P2P.Synchronization.Sync do
     # Filter peers that are connected and capable of sync
     Enum.filter(peers, fn peer ->
       peer.state == :connected and
-      peer.peer_id != nil and
-      get_peer_height(peer) > 0
+        peer.peer_id != nil and
+        get_peer_height(peer) > 0
     end)
   end
 
@@ -330,9 +378,15 @@ defmodule Bastille.Features.P2P.Synchronization.Sync do
 
     Enum.each(peers, fn peer ->
       getheaders_msg = Messages.getheaders_message(local_height, 0)
+
       case Node.send_to_peer(peer.peer_id, :getheaders, getheaders_msg[:getheaders]) do
-        :ok -> Logger.debug("📤 Requested headers from #{peer.peer_id} starting at height #{local_height}")
-        {:error, reason} -> Logger.warning("⚠️ Failed to request headers from #{peer.peer_id}: #{inspect(reason)}")
+        :ok ->
+          Logger.debug(
+            "📤 Requested headers from #{peer.peer_id} starting at height #{local_height}"
+          )
+
+        {:error, reason} ->
+          Logger.warning("⚠️ Failed to request headers from #{peer.peer_id}: #{inspect(reason)}")
       end
     end)
   end
@@ -349,20 +403,20 @@ defmodule Bastille.Features.P2P.Synchronization.Sync do
             new_stats = update_sync_stats(state.sync_stats, block)
 
             # Check if sync is complete
-    case new_local_height >= state.target_height do
-      true ->
-        Logger.info("🎉 Blockchain sync completed! Height: #{new_local_height}")
-        %{state |
-          local_height: new_local_height,
-          sync_state: :idle,
-          sync_stats: new_stats
-        }
-      false ->
-        %{state |
-          local_height: new_local_height,
-          sync_stats: new_stats
-        }
-    end
+            case new_local_height >= state.target_height do
+              true ->
+                Logger.info("🎉 Blockchain sync completed! Height: #{new_local_height}")
+
+                %{
+                  state
+                  | local_height: new_local_height,
+                    sync_state: :idle,
+                    sync_stats: new_stats
+                }
+
+              false ->
+                %{state | local_height: new_local_height, sync_stats: new_stats}
+            end
 
           {:error, reason} ->
             Logger.error("❌ Failed to add sync block #{block.header.index}: #{inspect(reason)}")
@@ -370,7 +424,10 @@ defmodule Bastille.Features.P2P.Synchronization.Sync do
         end
 
       {:error, reason} ->
-        Logger.warning("⚠️ Invalid sync block #{block.header.index} from #{from_peer}: #{inspect(reason)}")
+        Logger.warning(
+          "⚠️ Invalid sync block #{block.header.index} from #{from_peer}: #{inspect(reason)}"
+        )
+
         state
     end
   end
@@ -397,7 +454,11 @@ defmodule Bastille.Features.P2P.Synchronization.Sync do
     end
   end
 
-  defp validate_block_hash(%Bastille.Features.Block.Block{hash: hash, header: header, transactions: txs}) do
+  defp validate_block_hash(%Bastille.Features.Block.Block{
+         hash: hash,
+         header: header,
+         transactions: txs
+       }) do
     # Verify block hash matches content
     calculated_hash = calculate_block_hash(header, txs)
 
@@ -418,7 +479,9 @@ defmodule Bastille.Features.P2P.Synchronization.Sync do
     end)
   end
 
-  defp validate_block_chain_continuity(%Bastille.Features.Block.Block{header: %{index: index, previous_hash: prev_hash}}) do
+  defp validate_block_chain_continuity(%Bastille.Features.Block.Block{
+         header: %{index: index, previous_hash: prev_hash}
+       }) do
     # Verify block connects to existing chain
     current_height = safe_get_height()
 
@@ -429,9 +492,11 @@ defmodule Bastille.Features.P2P.Synchronization.Sync do
           ^prev_hash -> :ok
           _ -> {:error, :chain_break}
         end
+
       index <= current_height ->
         # Old block (might be reorganization)
         {:error, :old_block}
+
       index > current_height + 1 ->
         # Future block (missing intermediate blocks)
         {:error, :future_block}
@@ -454,13 +519,17 @@ defmodule Bastille.Features.P2P.Synchronization.Sync do
 
   defp calculate_block_hash(header, transactions) do
     # Use existing block hash calculation
-    Bastille.Features.Block.Block.calculate_hash(%Bastille.Features.Block.Block{header: header, transactions: transactions})
+    Bastille.Features.Block.Block.calculate_hash(%Bastille.Features.Block.Block{
+      header: header,
+      transactions: transactions
+    })
   end
 
   defp get_current_head_hash do
     case Bastille.Features.Chain.Chain.get_head_block() do
       {:ok, {_height, hash}} -> hash
-      _ -> String.duplicate("0", 64)  # Genesis case
+      # Genesis case
+      _ -> String.duplicate("0", 64)
     end
   end
 
@@ -484,7 +553,7 @@ defmodule Bastille.Features.P2P.Synchronization.Sync do
 
   defp calculate_sync_progress(%{local_height: local, target_height: target}) do
     case target > 0 do
-      true -> min(100.0, (local / target) * 100.0)
+      true -> min(100.0, local / target * 100.0)
       false -> 100.0
     end
   end
@@ -495,10 +564,10 @@ defmodule Bastille.Features.P2P.Synchronization.Sync do
     sync_start_time = stats.sync_start_time || System.system_time(:second)
 
     base_stats = %{
-      stats |
-      blocks_downloaded: new_blocks_downloaded,
-      bytes_downloaded: stats.bytes_downloaded + block_size,
-      sync_start_time: sync_start_time
+      stats
+      | blocks_downloaded: new_blocks_downloaded,
+        bytes_downloaded: stats.bytes_downloaded + block_size,
+        sync_start_time: sync_start_time
     }
 
     %{base_stats | sync_speed: calculate_sync_speed(base_stats)}
@@ -520,20 +589,28 @@ defmodule Bastille.Features.P2P.Synchronization.Sync do
                 difficulty: header.difficulty,
                 hash: hash
               }
+
               [header_with_hash | acc]
-            _ -> acc
+
+            _ ->
+              acc
           end
-        _ -> acc
+
+        _ ->
+          acc
       end
-    end) |> Enum.reverse()
+    end)
+    |> Enum.reverse()
   end
 
   defp build_headers_range(_start_h, _end_h), do: []
 
   defp safe_decode_header(%{} = map), do: {:ok, map}
+
+  # `:safe` — bin comes from a peer; forbid minting new atoms (atom-table DoS).
   defp safe_decode_header(bin) when is_binary(bin) do
     try do
-      {:ok, :erlang.binary_to_term(bin)}
+      {:ok, :erlang.binary_to_term(bin, [:safe])}
     rescue
       _ -> {:error, :invalid_header}
     end
@@ -543,6 +620,7 @@ defmodule Bastille.Features.P2P.Synchronization.Sync do
     # Calculate blocks per second since sync started
     start_time = stats.sync_start_time || System.system_time(:second)
     elapsed = System.system_time(:second) - start_time
+
     case elapsed > 0 do
       true -> stats.blocks_downloaded / elapsed
       false -> 0.0

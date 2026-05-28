@@ -19,10 +19,10 @@ defmodule Bastille.Features.Consensus.Engine do
   ]
 
   @type t :: %__MODULE__{
-    consensus_module: module(),
-    consensus_state: Behaviour.consensus_state(),
-    config: map()
-  }
+          consensus_module: module(),
+          consensus_state: Behaviour.consensus_state(),
+          config: map()
+        }
 
   # Client API
 
@@ -55,6 +55,7 @@ defmodule Bastille.Features.Consensus.Engine do
     case :persistent_term.get({__MODULE__, :snapshot}, nil) do
       {module, consensus_state} ->
         module.mine_block(block, consensus_state)
+
       _ ->
         GenServer.call(__MODULE__, {:mine_block, block}, :infinity)
     end
@@ -91,7 +92,8 @@ defmodule Bastille.Features.Consensus.Engine do
   @doc """
   Adjusts difficulty based on recent block times (lightweight).
   """
-  @spec adjust_difficulty_fast([%{index: non_neg_integer(), timestamp: integer()}]) :: non_neg_integer()
+  @spec adjust_difficulty_fast([%{index: non_neg_integer(), timestamp: integer()}]) ::
+          non_neg_integer()
   def adjust_difficulty_fast(recent_block_times) do
     GenServer.call(__MODULE__, {:adjust_difficulty_fast, recent_block_times}, 5_000)
   end
@@ -152,7 +154,10 @@ defmodule Bastille.Features.Consensus.Engine do
         {:ok, state}
 
       {:error, reason} ->
-        Logger.error("Failed to initialize consensus module #{inspect(consensus_module)}: #{inspect(reason)}")
+        Logger.error(
+          "Failed to initialize consensus module #{inspect(consensus_module)}: #{inspect(reason)}"
+        )
+
         {:stop, reason}
     end
   end
@@ -187,14 +192,18 @@ defmodule Bastille.Features.Consensus.Engine do
   end
 
   def handle_call({:adjust_difficulty, recent_blocks}, _from, %__MODULE__{} = state) do
-    new_difficulty = state.consensus_module.adjust_difficulty(recent_blocks, state.consensus_state)
+    new_difficulty =
+      state.consensus_module.adjust_difficulty(recent_blocks, state.consensus_state)
+
     new_state = %{state | consensus_state: maybe_set_difficulty(state, new_difficulty)}
     cache_info(new_state)
     {:reply, new_difficulty, new_state}
   end
 
   def handle_call({:adjust_difficulty_fast, recent_block_times}, _from, %__MODULE__{} = state) do
-    new_difficulty = state.consensus_module.adjust_difficulty(recent_block_times, state.consensus_state)
+    new_difficulty =
+      state.consensus_module.adjust_difficulty(recent_block_times, state.consensus_state)
+
     new_state = %{state | consensus_state: maybe_set_difficulty(state, new_difficulty)}
     cache_info(new_state)
     {:reply, new_difficulty, new_state}
@@ -217,7 +226,9 @@ defmodule Bastille.Features.Consensus.Engine do
   end
 
   def handle_call({:switch_consensus, new_module, new_config}, _from, %__MODULE__{} = state) do
-    Logger.info("Switching consensus from #{inspect(state.consensus_module)} to #{inspect(new_module)}")
+    Logger.info(
+      "Switching consensus from #{inspect(state.consensus_module)} to #{inspect(new_module)}"
+    )
 
     if function_exported?(state.consensus_module, :terminate, 2) do
       state.consensus_module.terminate(:switch, state.consensus_state)
@@ -230,6 +241,7 @@ defmodule Bastille.Features.Consensus.Engine do
           consensus_state: new_consensus_state,
           config: new_config
         }
+
         cache_info(new_state)
         Logger.info("Successfully switched to #{inspect(new_module)}")
         {:reply, :ok, new_state}
@@ -246,9 +258,11 @@ defmodule Bastille.Features.Consensus.Engine do
   @impl true
   def terminate(reason, %__MODULE__{} = state) do
     Logger.info("Consensus engine terminating: #{inspect(reason)}")
+
     if function_exported?(state.consensus_module, :terminate, 2) do
       state.consensus_module.terminate(reason, state.consensus_state)
     end
+
     :ok
   end
 

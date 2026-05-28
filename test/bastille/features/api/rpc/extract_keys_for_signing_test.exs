@@ -1,5 +1,4 @@
 defmodule Bastille.Features.Api.RPC.ExtractKeysForSigningTest do
-
   use ExUnit.Case, async: true
 
   alias Bastille.Features.Api.RPC.ExtractKeysForSigning
@@ -19,9 +18,11 @@ defmodule Bastille.Features.Api.RPC.ExtractKeysForSigningTest do
       result = ExtractKeysForSigning.call(%{"mnemonic" => ""})
 
       assert is_map(result)
+
       case result do
         %{"error" => %{"code" => -32_602, "message" => message}} ->
           assert is_binary(message)
+
         %{"address" => _} ->
           # Empty string might succeed with some implementations
           assert true
@@ -35,9 +36,11 @@ defmodule Bastille.Features.Api.RPC.ExtractKeysForSigningTest do
         result = ExtractKeysForSigning.call(%{"mnemonic" => mnemonic})
 
         assert is_map(result)
+
         case result do
           %{"error" => %{"code" => -32_602, "message" => message}} ->
             assert is_binary(message)
+
           %{"address" => _} ->
             # Some invalid types might still be processed
             assert true
@@ -46,7 +49,8 @@ defmodule Bastille.Features.Api.RPC.ExtractKeysForSigningTest do
     end
 
     test "processes valid mnemonic phrase" do
-      valid_mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+      valid_mnemonic =
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
 
       result = ExtractKeysForSigning.call(%{"mnemonic" => valid_mnemonic})
 
@@ -80,10 +84,14 @@ defmodule Bastille.Features.Api.RPC.ExtractKeysForSigningTest do
 
     test "handles various mnemonic formats" do
       mnemonic_formats = [
-        "word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12",  # 12 words
-        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art",  # 24 words
-        "UPPERCASE WORDS IN MNEMONIC PHRASE",  # Uppercase
-        "Mixed Case Words In Phrase"  # Mixed case
+        # 12 words
+        "word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12",
+        # 24 words
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art",
+        # Uppercase
+        "UPPERCASE WORDS IN MNEMONIC PHRASE",
+        # Mixed case
+        "Mixed Case Words In Phrase"
       ]
 
       for mnemonic <- mnemonic_formats do
@@ -108,10 +116,13 @@ defmodule Bastille.Features.Api.RPC.ExtractKeysForSigningTest do
 
     test "handles invalid mnemonic phrases" do
       invalid_mnemonics = [
-        "too few words",  # Too few words
+        # Too few words
+        "too few words",
         "invalid words that are not in bip39 wordlist here",
-        "1234 5678 9012",  # Numbers instead of words
-        "special!@#$ characters%^&* in() phrase",  # Special characters
+        # Numbers instead of words
+        "1234 5678 9012",
+        # Special characters
+        "special!@#$ characters%^&* in() phrase"
       ]
 
       for mnemonic <- invalid_mnemonics do
@@ -148,11 +159,13 @@ defmodule Bastille.Features.Api.RPC.ExtractKeysForSigningTest do
     end
 
     test "handles additional parameters gracefully" do
-      result = ExtractKeysForSigning.call(%{
-        "mnemonic" => "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
-        "unused" => "parameter",
-        "ignored" => 123
-      })
+      result =
+        ExtractKeysForSigning.call(%{
+          "mnemonic" =>
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+          "unused" => "parameter",
+          "ignored" => 123
+        })
 
       assert is_map(result)
       # Should process the mnemonic parameter and ignore others
@@ -161,9 +174,11 @@ defmodule Bastille.Features.Api.RPC.ExtractKeysForSigningTest do
 
   describe "response format" do
     test "successful response contains keys and address" do
-      result = ExtractKeysForSigning.call(%{
-        "mnemonic" => "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
-      })
+      result =
+        ExtractKeysForSigning.call(%{
+          "mnemonic" =>
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+        })
 
       case result do
         %{"address" => address, "sign_transaction_payload" => payload} ->
@@ -172,6 +187,7 @@ defmodule Bastille.Features.Api.RPC.ExtractKeysForSigningTest do
 
           # Payload should contain all three private keys
           expected_keys = ["dilithium_key", "falcon_key", "sphincs_key"]
+
           for key <- expected_keys do
             assert Map.has_key?(payload, key)
             assert is_binary(payload[key])
@@ -184,9 +200,10 @@ defmodule Bastille.Features.Api.RPC.ExtractKeysForSigningTest do
     end
 
     test "key structure is correct when present" do
-      result = ExtractKeysForSigning.call(%{
-        "mnemonic" => "test mnemonic phrase with sufficient words to make valid seed"
-      })
+      result =
+        ExtractKeysForSigning.call(%{
+          "mnemonic" => "test mnemonic phrase with sufficient words to make valid seed"
+        })
 
       case result do
         %{"sign_transaction_payload" => payload} ->
@@ -207,9 +224,11 @@ defmodule Bastille.Features.Api.RPC.ExtractKeysForSigningTest do
     end
 
     test "address format is correct when present" do
-      result = ExtractKeysForSigning.call(%{
-        "mnemonic" => "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
-      })
+      result =
+        ExtractKeysForSigning.call(%{
+          "mnemonic" =>
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+        })
 
       case result do
         %{"address" => address} ->
@@ -236,9 +255,10 @@ defmodule Bastille.Features.Api.RPC.ExtractKeysForSigningTest do
 
   describe "error handling" do
     test "handles crypto service unavailable" do
-      result = ExtractKeysForSigning.call(%{
-        "mnemonic" => "test mnemonic phrase"
-      })
+      result =
+        ExtractKeysForSigning.call(%{
+          "mnemonic" => "test mnemonic phrase"
+        })
 
       # Should never crash, always return a map
       assert is_map(result)
@@ -248,9 +268,10 @@ defmodule Bastille.Features.Api.RPC.ExtractKeysForSigningTest do
     end
 
     test "handles key derivation errors gracefully" do
-      result = ExtractKeysForSigning.call(%{
-        "mnemonic" => "potentially invalid mnemonic phrase that might cause derivation issues"
-      })
+      result =
+        ExtractKeysForSigning.call(%{
+          "mnemonic" => "potentially invalid mnemonic phrase that might cause derivation issues"
+        })
 
       assert is_map(result)
 
@@ -272,7 +293,8 @@ defmodule Bastille.Features.Api.RPC.ExtractKeysForSigningTest do
 
   describe "deterministic behavior" do
     test "same mnemonic produces same keys" do
-      mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+      mnemonic =
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
 
       result1 = ExtractKeysForSigning.call(%{"mnemonic" => mnemonic})
       result2 = ExtractKeysForSigning.call(%{"mnemonic" => mnemonic})
@@ -291,8 +313,11 @@ defmodule Bastille.Features.Api.RPC.ExtractKeysForSigningTest do
     end
 
     test "different mnemonics produce different keys" do
-      mnemonic1 = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
-      mnemonic2 = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon"
+      mnemonic1 =
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+
+      mnemonic2 =
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon"
 
       result1 = ExtractKeysForSigning.call(%{"mnemonic" => mnemonic1})
       result2 = ExtractKeysForSigning.call(%{"mnemonic" => mnemonic2})

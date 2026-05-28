@@ -12,7 +12,7 @@ defmodule Bastille.Shared.CryptoTest do
           assert Map.has_key?(keypair, :dilithium)
           assert Map.has_key?(keypair, :falcon)
           assert Map.has_key?(keypair, :sphincs)
-          
+
           # Each algorithm should have public and private keys
           assert Map.has_key?(keypair.dilithium, :public)
           assert Map.has_key?(keypair.dilithium, :private)
@@ -20,7 +20,7 @@ defmodule Bastille.Shared.CryptoTest do
           assert Map.has_key?(keypair.falcon, :private)
           assert Map.has_key?(keypair.sphincs, :public)
           assert Map.has_key?(keypair.sphincs, :private)
-          
+
           # Keys should be binary and non-empty
           assert is_binary(keypair.dilithium.public) and byte_size(keypair.dilithium.public) > 0
           assert is_binary(keypair.dilithium.private) and byte_size(keypair.dilithium.private) > 0
@@ -28,7 +28,7 @@ defmodule Bastille.Shared.CryptoTest do
           assert is_binary(keypair.falcon.private) and byte_size(keypair.falcon.private) > 0
           assert is_binary(keypair.sphincs.public) and byte_size(keypair.sphincs.public) > 0
           assert is_binary(keypair.sphincs.private) and byte_size(keypair.sphincs.private) > 0
-        
+
         _error ->
           # NIFs might not be available in test environment
           assert true
@@ -41,7 +41,7 @@ defmodule Bastille.Shared.CryptoTest do
         {kp1, kp2} when is_map(kp1) and is_map(kp2) ->
           # Both should have same structure
           assert Map.keys(kp1) == Map.keys(kp2)
-        
+
         _ ->
           # NIFs might not be available
           assert true
@@ -55,7 +55,7 @@ defmodule Bastille.Shared.CryptoTest do
           assert kp1.dilithium.private != kp2.dilithium.private
           assert kp1.falcon.private != kp2.falcon.private
           assert kp1.sphincs.private != kp2.sphincs.private
-        
+
         _ ->
           # NIFs might not be available
           assert true
@@ -69,11 +69,11 @@ defmodule Bastille.Shared.CryptoTest do
         %{public: pub, private: priv} ->
           assert is_binary(pub) and byte_size(pub) > 0
           assert is_binary(priv) and byte_size(priv) > 0
-          
+
           # Check expected key sizes
           assert byte_size(pub) == Crypto.dilithium_public_key_size()
           assert byte_size(priv) == Crypto.dilithium_private_key_size()
-        
+
         _ ->
           # NIFs might not be available
           assert true
@@ -85,11 +85,11 @@ defmodule Bastille.Shared.CryptoTest do
         %{public: pub, private: priv} ->
           assert is_binary(pub) and byte_size(pub) > 0
           assert is_binary(priv) and byte_size(priv) > 0
-          
+
           # Check expected key sizes
           assert byte_size(pub) == Crypto.falcon_public_key_size()
           assert byte_size(priv) == Crypto.falcon_private_key_size()
-        
+
         _ ->
           # NIFs might not be available
           assert true
@@ -101,11 +101,11 @@ defmodule Bastille.Shared.CryptoTest do
         %{public: pub, private: priv} ->
           assert is_binary(pub) and byte_size(pub) > 0
           assert is_binary(priv) and byte_size(priv) > 0
-          
+
           # Check expected key sizes
           assert byte_size(pub) == Crypto.sphincs_public_key_size()
           assert byte_size(priv) == Crypto.sphincs_private_key_size()
-        
+
         _ ->
           # NIFs might not be available
           assert true
@@ -116,7 +116,7 @@ defmodule Bastille.Shared.CryptoTest do
   describe "deterministic key generation" do
     test "generates same keys from same seed" do
       seed = "test seed for deterministic generation"
-      
+
       case {
         Crypto.generate_dilithium_keypair_from_seed(seed),
         Crypto.generate_dilithium_keypair_from_seed(seed)
@@ -124,7 +124,7 @@ defmodule Bastille.Shared.CryptoTest do
         {kp1, kp2} when is_map(kp1) and is_map(kp2) ->
           assert kp1.public == kp2.public
           assert kp1.private == kp2.private
-        
+
         _ ->
           # NIFs might not be available
           assert true
@@ -134,7 +134,7 @@ defmodule Bastille.Shared.CryptoTest do
     test "generates different keys from different seeds" do
       seed1 = "first test seed"
       seed2 = "second test seed"
-      
+
       case {
         Crypto.generate_dilithium_keypair_from_seed(seed1),
         Crypto.generate_dilithium_keypair_from_seed(seed2)
@@ -142,7 +142,7 @@ defmodule Bastille.Shared.CryptoTest do
         {kp1, kp2} when is_map(kp1) and is_map(kp2) ->
           assert kp1.public != kp2.public
           assert kp1.private != kp2.private
-        
+
         _ ->
           # NIFs might not be available
           assert true
@@ -151,18 +151,18 @@ defmodule Bastille.Shared.CryptoTest do
 
     test "all algorithms support deterministic generation" do
       seed = "multi-algorithm test seed"
-      
+
       dil_result = Crypto.generate_dilithium_keypair_from_seed(seed)
       fal_result = Crypto.generate_falcon_keypair_from_seed(seed)
       sph_result = Crypto.generate_sphincs_keypair_from_seed(seed)
-      
+
       # All should either succeed or fail consistently
       case {dil_result, fal_result, sph_result} do
         {%{}, %{}, %{}} ->
           # All succeeded - keys should be different between algorithms
           assert dil_result.public != fal_result.public
           assert fal_result.public != sph_result.public
-        
+
         _ ->
           # Some/all failed - NIFs might not be available
           assert true
@@ -175,16 +175,21 @@ defmodule Bastille.Shared.CryptoTest do
       case Crypto.generate_pq_keypair() do
         keypair when is_map(keypair) ->
           address = Crypto.generate_bastille_address(keypair)
-          
+
           assert is_binary(address)
-          assert String.starts_with?(address, Application.get_env(:bastille, :address_prefix, "1789"))
+
+          assert String.starts_with?(
+                   address,
+                   Application.get_env(:bastille, :address_prefix, "1789")
+                 )
+
           assert Crypto.valid_address?(address)
-          
+
           # Address should have correct length (prefix + 40 hex chars)
           prefix = Application.get_env(:bastille, :address_prefix, "1789")
           expected_length = String.length(prefix) + 40
           assert String.length(address) == expected_length
-        
+
         _ ->
           # NIFs might not be available
           assert true
@@ -193,7 +198,7 @@ defmodule Bastille.Shared.CryptoTest do
 
     test "same keypair generates same address" do
       seed = "deterministic address test"
-      
+
       case {
         Crypto.generate_dilithium_keypair_from_seed(seed),
         Crypto.generate_falcon_keypair_from_seed(seed),
@@ -202,12 +207,12 @@ defmodule Bastille.Shared.CryptoTest do
         {dil, fal, sph} when is_map(dil) and is_map(fal) and is_map(sph) ->
           keypair1 = %{dilithium: dil, falcon: fal, sphincs: sph}
           keypair2 = %{dilithium: dil, falcon: fal, sphincs: sph}
-          
+
           address1 = Crypto.generate_bastille_address(keypair1)
           address2 = Crypto.generate_bastille_address(keypair2)
-          
+
           assert address1 == address2
-        
+
         _ ->
           # NIFs might not be available
           assert true
@@ -219,9 +224,9 @@ defmodule Bastille.Shared.CryptoTest do
         {kp1, kp2} when is_map(kp1) and is_map(kp2) ->
           address1 = Crypto.generate_bastille_address(kp1)
           address2 = Crypto.generate_bastille_address(kp2)
-          
+
           assert address1 != address2
-        
+
         _ ->
           # NIFs might not be available
           assert true
@@ -235,7 +240,7 @@ defmodule Bastille.Shared.CryptoTest do
         keypair when is_map(keypair) ->
           address = Crypto.generate_bastille_address(keypair)
           assert Crypto.valid_address?(address)
-        
+
         _ ->
           # Test with known valid format
           prefix = Application.get_env(:bastille, :address_prefix, "1789")
@@ -251,11 +256,11 @@ defmodule Bastille.Shared.CryptoTest do
 
     test "rejects addresses with wrong length" do
       prefix = Application.get_env(:bastille, :address_prefix, "1789")
-      
+
       # Too short
       short_address = prefix <> String.duplicate("a", 20)
       refute Crypto.valid_address?(short_address)
-      
+
       # Too long
       long_address = prefix <> String.duplicate("a", 60)
       refute Crypto.valid_address?(long_address)
@@ -263,13 +268,14 @@ defmodule Bastille.Shared.CryptoTest do
 
     test "rejects addresses with invalid hex characters" do
       prefix = Application.get_env(:bastille, :address_prefix, "1789")
-      invalid_address = prefix <> String.duplicate("g", 40)  # 'g' is not hex
+      # 'g' is not hex
+      invalid_address = prefix <> String.duplicate("g", 40)
       refute Crypto.valid_address?(invalid_address)
     end
 
     test "rejects malformed addresses" do
       invalid_addresses = ["", nil, 123, %{}, [], "invalid"]
-      
+
       for addr <- invalid_addresses do
         refute Crypto.valid_address?(addr)
       end
@@ -278,10 +284,11 @@ defmodule Bastille.Shared.CryptoTest do
     test "validates special genesis address" do
       prefix = Application.get_env(:bastille, :address_prefix, "1789")
       genesis_address = prefix <> "Genesis"
-      
+
       # Check if genesis addresses are handled specially
       # Note: This might fail if genesis validation is not implemented
-      if String.length(genesis_address) == String.length(prefix) + 7 do  # "Genesis" = 7 chars
+      # "Genesis" = 7 chars
+      if String.length(genesis_address) == String.length(prefix) + 7 do
         # Genesis address format might be accepted
         result = Crypto.valid_address?(genesis_address)
         # This test documents current behavior
@@ -296,7 +303,7 @@ defmodule Bastille.Shared.CryptoTest do
   describe "algorithm information" do
     test "returns correct algorithm list" do
       algorithms = Crypto.get_algorithms()
-      
+
       assert is_list(algorithms)
       assert length(algorithms) == 3
       assert "Dilithium2" in algorithms
@@ -306,7 +313,7 @@ defmodule Bastille.Shared.CryptoTest do
 
     test "returns correct threshold" do
       {required, total} = Crypto.get_threshold()
-      
+
       assert required == 2
       assert total == 3
     end
@@ -315,22 +322,33 @@ defmodule Bastille.Shared.CryptoTest do
   describe "key size constants" do
     test "returns correct key sizes" do
       # Test that all size functions return positive integers
-      assert is_integer(Crypto.dilithium_private_key_size()) and Crypto.dilithium_private_key_size() > 0
-      assert is_integer(Crypto.dilithium_public_key_size()) and Crypto.dilithium_public_key_size() > 0
+      assert is_integer(Crypto.dilithium_private_key_size()) and
+               Crypto.dilithium_private_key_size() > 0
+
+      assert is_integer(Crypto.dilithium_public_key_size()) and
+               Crypto.dilithium_public_key_size() > 0
+
       assert is_integer(Crypto.falcon_private_key_size()) and Crypto.falcon_private_key_size() > 0
       assert is_integer(Crypto.falcon_public_key_size()) and Crypto.falcon_public_key_size() > 0
-      assert is_integer(Crypto.sphincs_private_key_size()) and Crypto.sphincs_private_key_size() > 0
+
+      assert is_integer(Crypto.sphincs_private_key_size()) and
+               Crypto.sphincs_private_key_size() > 0
+
       assert is_integer(Crypto.sphincs_public_key_size()) and Crypto.sphincs_public_key_size() > 0
-      assert is_integer(Crypto.dilithium_signature_size()) and Crypto.dilithium_signature_size() > 0
+
+      assert is_integer(Crypto.dilithium_signature_size()) and
+               Crypto.dilithium_signature_size() > 0
+
       assert is_integer(Crypto.falcon_signature_size()) and Crypto.falcon_signature_size() > 0
       assert is_integer(Crypto.sphincs_signature_size()) and Crypto.sphincs_signature_size() > 0
     end
 
-    test "private keys are larger than public keys" do
-      # Generally, private keys should be larger than or equal to public keys
-      assert Crypto.dilithium_private_key_size() >= Crypto.dilithium_public_key_size()
+    test "private key sizes reflect each scheme's encoding" do
+      # Falcon and SPHINCS+ keep a private key at least as large as the public key.
       assert Crypto.falcon_private_key_size() >= Crypto.falcon_public_key_size()
-      # Note: SPHINCS+ might be an exception where public key is larger
+      assert Crypto.sphincs_private_key_size() >= Crypto.sphincs_public_key_size()
+      # ML-DSA (Dilithium) stores only the 32-byte seed, smaller than its public key.
+      assert Crypto.dilithium_private_key_size() < Crypto.dilithium_public_key_size()
     end
   end
 

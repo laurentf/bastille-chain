@@ -19,14 +19,15 @@ defmodule Bastille.Features.Mining.MiningCoordinator do
   defstruct [
     :mining_address,
     :mining_enabled,
-    mining_state: :idle  # :idle | :mining
+    # :idle | :mining
+    mining_state: :idle
   ]
 
   @type t :: %__MODULE__{
-    mining_address: binary() | nil,
-    mining_enabled: boolean(),
-    mining_state: :idle | :mining
-  }
+          mining_address: binary() | nil,
+          mining_enabled: boolean(),
+          mining_state: :idle | :mining
+        }
 
   # Note: block_reward is now a protocol constant from Token module
 
@@ -116,7 +117,11 @@ defmodule Bastille.Features.Mining.MiningCoordinator do
       end
 
     publish_mining_status(final_state)
-    Logger.info("🎯 Validator started: mining #{if mining_enabled, do: "enabled", else: "disabled"}")
+
+    Logger.info(
+      "🎯 Validator started: mining #{if mining_enabled, do: "enabled", else: "disabled"}"
+    )
+
     {:ok, final_state}
   end
 
@@ -124,12 +129,9 @@ defmodule Bastille.Features.Mining.MiningCoordinator do
   def handle_call({:start_mining, mining_address}, _from, state) do
     case state.mining_state do
       :idle ->
-        new_state = %{state |
-          mining_address: mining_address,
-          mining_enabled: true,
-          mining_state: :mining
-        }
-        |> start_mining_task()
+        new_state =
+          %{state | mining_address: mining_address, mining_enabled: true, mining_state: :mining}
+          |> start_mining_task()
 
         publish_mining_status(new_state)
         Logger.info("🎯 Mining started to address: #{Base.encode16(mining_address, case: :lower)}")
@@ -153,13 +155,14 @@ defmodule Bastille.Features.Mining.MiningCoordinator do
       enabled: state.mining_enabled,
       address: state.mining_address
     }
+
     {:reply, status, state}
   end
 
   def handle_call({:mine_block, mining_address}, _from, state) do
     case create_and_mine_block(mining_address) do
       {:ok, block} ->
-    case Chain.add_block(block) do
+        case Chain.add_block(block) do
           :ok ->
             # Remove mined transactions from mempool
             tx_hashes = Enum.map(block.transactions, & &1.hash)
@@ -192,7 +195,10 @@ defmodule Bastille.Features.Mining.MiningCoordinator do
     {:noreply, state}
   end
 
-  def handle_info(:mine_next_block, %{mining_state: :idle, mining_enabled: true, mining_address: address} = state)
+  def handle_info(
+        :mine_next_block,
+        %{mining_state: :idle, mining_enabled: true, mining_address: address} = state
+      )
       when is_binary(address) do
     # Mining runs synchronously inside this handler. RPC status calls don't
     # block because mining_status is published to :persistent_term and the
@@ -225,7 +231,11 @@ defmodule Bastille.Features.Mining.MiningCoordinator do
 
           {:orphan, parent_hash} ->
             Logger.info("🔄 MINED BLOCK BECAME ORPHAN - waiting for parent")
-            Logger.info("   └─ Missing parent: #{Base.encode16(parent_hash) |> String.slice(0, 8)}...")
+
+            Logger.info(
+              "   └─ Missing parent: #{Base.encode16(parent_hash) |> String.slice(0, 8)}..."
+            )
+
             schedule_next(state, 100)
 
           {:error, reason} ->
@@ -256,7 +266,10 @@ defmodule Bastille.Features.Mining.MiningCoordinator do
   defp start_mining_task(%__MODULE__{mining_address: address} = state) do
     Logger.info("🚀 STARTING MINING CYCLE")
     Logger.info("   └─ Mining address: #{address}")
-    Logger.info("   └─ Block reward: #{Token.fixed_reward_juillet()} juillet (#{Token.fixed_reward()} BAST)")
+
+    Logger.info(
+      "   └─ Block reward: #{Token.fixed_reward_juillet()} juillet (#{Token.fixed_reward()} BAST)"
+    )
 
     # Start the mining cycle
     Process.send_after(self(), :mine_next_block, 100)
@@ -273,7 +286,10 @@ defmodule Bastille.Features.Mining.MiningCoordinator do
 
     Logger.info("🔗 Blockchain state:")
     Logger.info("   └─ Current height: #{height}")
-    Logger.info("   └─ Previous block hash: #{if head_block, do: "#{Base.encode16(head_block.hash, case: :lower) |> String.slice(0, 16)}...", else: "genesis"}")
+
+    Logger.info(
+      "   └─ Previous block hash: #{if head_block, do: "#{Base.encode16(head_block.hash, case: :lower) |> String.slice(0, 16)}...", else: "genesis"}"
+    )
 
     # Get transactions from mempool
     pending_transactions = Mempool.get_transactions(100)
@@ -294,6 +310,7 @@ defmodule Bastille.Features.Mining.MiningCoordinator do
 
     # Log fee collection summary (burn disabled)
     total_fees = Enum.reduce(pending_transactions, 0, fn tx, acc -> acc + tx.fee end)
+
     if total_fees > 0 do
       Logger.info("💸 Fee total collected: #{total_fees} juillet (100% to miner; burn disabled)")
     end
@@ -310,33 +327,34 @@ defmodule Bastille.Features.Mining.MiningCoordinator do
 
     Logger.info("🎯 CALCULATING DYNAMIC DIFFICULTY")
 
-    difficulty = if height == 0 do
-      # Genesis block: start easy for testing
-      Logger.info("🚀 Genesis block detected - Using minimal difficulty 1")
+    difficulty =
+      if height == 0 do
+        # Genesis block: start easy for testing
+        Logger.info("🚀 Genesis block detected - Using minimal difficulty 1")
 
-      # FORCE the consensus engine to use difficulty 1 for genesis
-      Consensus.Engine.set_difficulty(1)
-      1
-    else
-      # Delegate the actual adjustment to the consensus engine. It respects
-      # `difficulty_adjustment_interval` (no change between adjustment points)
-      # and caps the change factor — bypassing it here caused the difficulty
-      # to multiply on every single block and explode (1 → 65536 in ~9 blocks).
-      # We exclude genesis (index 0) from the window so its symbolic timestamp
-      # doesn't poison the actual-time calculation.
-      recent_block_times =
-        Chain.get_recent_block_times(10)
-        |> Enum.reject(&(&1.index == 0))
+        # FORCE the consensus engine to use difficulty 1 for genesis
+        Consensus.Engine.set_difficulty(1)
+        1
+      else
+        # Delegate the actual adjustment to the consensus engine. It respects
+        # `difficulty_adjustment_interval` (no change between adjustment points)
+        # and caps the change factor — bypassing it here caused the difficulty
+        # to multiply on every single block and explode (1 → 65536 in ~9 blocks).
+        # We exclude genesis (index 0) from the window so its symbolic timestamp
+        # doesn't poison the actual-time calculation.
+        recent_block_times =
+          Chain.get_recent_block_times(10)
+          |> Enum.reject(&(&1.index == 0))
 
-      current_difficulty = Consensus.Engine.get_difficulty()
-      new_difficulty = Consensus.Engine.adjust_difficulty_fast(recent_block_times)
+        current_difficulty = Consensus.Engine.get_difficulty()
+        new_difficulty = Consensus.Engine.adjust_difficulty_fast(recent_block_times)
 
-      if new_difficulty != current_difficulty do
-        Logger.info("🎯 Difficulty adjusted: #{current_difficulty} → #{new_difficulty}")
+        if new_difficulty != current_difficulty do
+          Logger.info("🎯 Difficulty adjusted: #{current_difficulty} → #{new_difficulty}")
+        end
+
+        new_difficulty
       end
-
-      new_difficulty
-    end
 
     Logger.info("🔨 CREATING BLOCK TEMPLATE")
     Logger.info("   └─ Block index: #{height + 1}")
@@ -344,16 +362,23 @@ defmodule Bastille.Features.Mining.MiningCoordinator do
     Logger.info("   └─ Number of transactions: #{length(all_transactions)}")
 
     # Create block template with dynamic difficulty
-    block_template = Block.new([
-      index: height + 1,
-      previous_hash: if(head_block, do: head_block.hash, else: <<0::256>>),
-      transactions: all_transactions,
-      difficulty: difficulty
-    ])
+    block_template =
+      Block.new(
+        index: height + 1,
+        previous_hash: if(head_block, do: head_block.hash, else: <<0::256>>),
+        transactions: all_transactions,
+        difficulty: difficulty
+      )
 
     Logger.info("📋 Block template created successfully")
-    Logger.info("   └─ Previous hash: #{Base.encode16(block_template.header.previous_hash, case: :lower) |> String.slice(0, 16)}...")
-    Logger.info("   └─ Merkle root: #{Base.encode16(block_template.header.merkle_root, case: :lower) |> String.slice(0, 16)}...")
+
+    Logger.info(
+      "   └─ Previous hash: #{Base.encode16(block_template.header.previous_hash, case: :lower) |> String.slice(0, 16)}..."
+    )
+
+    Logger.info(
+      "   └─ Merkle root: #{Base.encode16(block_template.header.merkle_root, case: :lower) |> String.slice(0, 16)}..."
+    )
 
     Logger.info("⚡ STARTING BLAKE3 MINING")
     Logger.info("   └─ Algorithm: Blake3 (ultra-fast)")
@@ -371,7 +396,11 @@ defmodule Bastille.Features.Mining.MiningCoordinator do
         Logger.info("🎉 BLOCK SUCCESSFULLY MINED!")
         Logger.info("   └─ Mining duration: #{mining_duration}ms")
         Logger.info("   └─ Found nonce: #{mined_block.header.nonce}")
-        Logger.info("   └─ Block hash: #{Base.encode16(mined_block.hash, case: :lower) |> String.slice(0, 32)}...")
+
+        Logger.info(
+          "   └─ Block hash: #{Base.encode16(mined_block.hash, case: :lower) |> String.slice(0, 32)}..."
+        )
+
         Logger.info("   └─ Verifying proof of work...")
 
         {:ok, mined_block}
@@ -430,35 +459,52 @@ defmodule Bastille.Features.Mining.MiningCoordinator do
     Logger.info("   └─ Number of transactions: #{length(block.transactions)}")
 
     # Step-by-step testing
-    header_valid = case block.header do
-      %{index: i, timestamp: t, difficulty: d}
+    header_valid =
+      case block.header do
+        %{index: i, timestamp: t, difficulty: d}
         when is_integer(i) and i >= 0 and is_integer(t) and is_integer(d) and d > 0 ->
-        Logger.info("   ✅ Header valid")
-        true
-      _ ->
-        Logger.error("   ❌ Header invalid")
-        false
-    end
+          Logger.info("   ✅ Header valid")
+          true
+
+        _ ->
+          Logger.error("   ❌ Header invalid")
+          false
+      end
 
     transactions_valid = Enum.all?(block.transactions, &Transaction.valid?/1)
-    Logger.info("   #{if transactions_valid, do: "✅", else: "❌"} Transactions valid: #{transactions_valid}")
+
+    Logger.info(
+      "   #{if transactions_valid, do: "✅", else: "❌"} Transactions valid: #{transactions_valid}"
+    )
 
     # Test merkle root
     expected_block = Block.calculate_merkle_root(block)
     merkle_valid = block.header.merkle_root == expected_block.header.merkle_root
     Logger.info("   #{if merkle_valid, do: "✅", else: "❌"} Merkle root valid: #{merkle_valid}")
+
     if not merkle_valid do
-      Logger.error("   └─ Expected: #{Base.encode16(expected_block.header.merkle_root, case: :lower) |> String.slice(0, 16)}...")
-      Logger.error("   └─ Received: #{Base.encode16(block.header.merkle_root, case: :lower) |> String.slice(0, 16)}...")
+      Logger.error(
+        "   └─ Expected: #{Base.encode16(expected_block.header.merkle_root, case: :lower) |> String.slice(0, 16)}..."
+      )
+
+      Logger.error(
+        "   └─ Received: #{Base.encode16(block.header.merkle_root, case: :lower) |> String.slice(0, 16)}..."
+      )
     end
 
     # Test hash
     expected_hash_block = Block.calculate_hash(%{block | hash: nil})
     hash_valid = block.hash == expected_hash_block.hash
     Logger.info("   #{if hash_valid, do: "✅", else: "❌"} Hash valid: #{hash_valid}")
+
     if not hash_valid do
-      Logger.error("   └─ Expected hash: #{Base.encode16(expected_hash_block.hash, case: :lower) |> String.slice(0, 16)}...")
-      Logger.error("   └─ Received hash: #{Base.encode16(block.hash, case: :lower) |> String.slice(0, 16)}...")
+      Logger.error(
+        "   └─ Expected hash: #{Base.encode16(expected_hash_block.hash, case: :lower) |> String.slice(0, 16)}..."
+      )
+
+      Logger.error(
+        "   └─ Received hash: #{Base.encode16(block.hash, case: :lower) |> String.slice(0, 16)}..."
+      )
     end
 
     overall_valid = header_valid and transactions_valid and merkle_valid and hash_valid
@@ -483,6 +529,7 @@ defmodule Bastille.Features.Mining.MiningCoordinator do
   defp format_hash(hash) when is_binary(hash) do
     hash |> Base.encode16(case: :lower) |> String.slice(0, 32)
   end
+
   defp format_hash(_), do: "invalid_hash"
 
   # Reschedule the mining loop and publish the new (idle) status for lock-free

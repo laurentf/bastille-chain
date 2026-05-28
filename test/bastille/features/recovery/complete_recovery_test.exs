@@ -14,7 +14,7 @@ defmodule Bastille.Features.Keys.CompleteRecoveryFeatureTest do
       assert length(words) == 24
       assert Mnemonic.valid_mnemonic?(seed)
 
-      {:ok, keys} = Seed.derive_keys_from_seed(seed)
+      {:ok, keys} = Seed.derive_keys_from_mnemonic(seed)
       assert is_map(keys)
       assert Map.has_key?(keys, :dilithium)
       assert Map.has_key?(keys, :falcon)
@@ -24,8 +24,8 @@ defmodule Bastille.Features.Keys.CompleteRecoveryFeatureTest do
     test "deterministic: same seed => same keys" do
       seed = Seed.generate_master_seed()
 
-      {:ok, k1} = Seed.derive_keys_from_seed(seed)
-      {:ok, k2} = Seed.derive_keys_from_seed(seed)
+      {:ok, k1} = Seed.derive_keys_from_mnemonic(seed)
+      {:ok, k2} = Seed.derive_keys_from_mnemonic(seed)
 
       assert k1.dilithium == k2.dilithium
       assert k1.falcon == k2.falcon
@@ -34,22 +34,29 @@ defmodule Bastille.Features.Keys.CompleteRecoveryFeatureTest do
 
     test "address generation stable from derived keys" do
       seed = Seed.generate_master_seed()
-      {:ok, keys} = Seed.derive_keys_from_seed(seed)
+      {:ok, keys} = Seed.derive_keys_from_mnemonic(seed)
 
-      address1 = Crypto.generate_bastille_address(%{
-        dilithium: keys.dilithium,
-        falcon: keys.falcon,
-        sphincs: keys.sphincs
-      })
+      address1 =
+        Crypto.generate_bastille_address(%{
+          dilithium: keys.dilithium,
+          falcon: keys.falcon,
+          sphincs: keys.sphincs
+        })
 
-      address2 = Crypto.generate_bastille_address(%{
-        dilithium: keys.dilithium,
-        falcon: keys.falcon,
-        sphincs: keys.sphincs
-      })
+      address2 =
+        Crypto.generate_bastille_address(%{
+          dilithium: keys.dilithium,
+          falcon: keys.falcon,
+          sphincs: keys.sphincs
+        })
 
       assert is_binary(address1)
-      assert String.starts_with?(address1, Application.get_env(:bastille, :address_prefix, "1789"))
+
+      assert String.starts_with?(
+               address1,
+               Application.get_env(:bastille, :address_prefix, "1789")
+             )
+
       assert address1 == address2
     end
   end

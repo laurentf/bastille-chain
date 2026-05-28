@@ -99,7 +99,8 @@ defmodule Bastille.Features.Mining.MiningTest do
 
     test "valid_hash? rejects invalid hash format" do
       # Test with wrong hash size
-      invalid_hash = :crypto.strong_rand_bytes(16)  # 16 bytes instead of 32
+      # 16 bytes instead of 32
+      invalid_hash = :crypto.strong_rand_bytes(16)
       target = Mining.testing_target()
 
       result = Mining.valid_hash?(invalid_hash, target)
@@ -109,7 +110,8 @@ defmodule Bastille.Features.Mining.MiningTest do
     test "valid_hash? rejects invalid target format" do
       # Test with wrong target size
       hash = :crypto.strong_rand_bytes(32)
-      invalid_target = :crypto.strong_rand_bytes(16)  # 16 bytes instead of 32
+      # 16 bytes instead of 32
+      invalid_target = :crypto.strong_rand_bytes(16)
 
       result = Mining.valid_hash?(hash, invalid_target)
       assert result == false
@@ -119,12 +121,13 @@ defmodule Bastille.Features.Mining.MiningTest do
   describe "block serialization" do
     test "serialize_block_for_mining produces consistent output" do
       # Create a proper Block struct
-      block = Block.new([
-        index: 1,
-        previous_hash: <<0::256>>,
-        transactions: [],
-        difficulty: 4
-      ])
+      block =
+        Block.new(
+          index: 1,
+          previous_hash: <<0::256>>,
+          transactions: [],
+          difficulty: 4
+        )
 
       serialized1 = Mining.serialize_block_for_mining(block)
       serialized2 = Mining.serialize_block_for_mining(block)
@@ -134,19 +137,22 @@ defmodule Bastille.Features.Mining.MiningTest do
     end
 
     test "different blocks serialize differently" do
-      block1 = Block.new([
-        index: 1,
-        previous_hash: <<0::256>>,
-        transactions: [],
-        difficulty: 4
-      ])
+      block1 =
+        Block.new(
+          index: 1,
+          previous_hash: <<0::256>>,
+          transactions: [],
+          difficulty: 4
+        )
 
-      block2 = Block.new([
-        index: 2,  # Different index
-        previous_hash: <<0::256>>,
-        transactions: [],
-        difficulty: 4
-      ])
+      block2 =
+        Block.new(
+          # Different index
+          index: 2,
+          previous_hash: <<0::256>>,
+          transactions: [],
+          difficulty: 4
+        )
 
       serialized1 = Mining.serialize_block_for_mining(block1)
       serialized2 = Mining.serialize_block_for_mining(block2)
@@ -155,21 +161,24 @@ defmodule Bastille.Features.Mining.MiningTest do
     end
 
     test "blocks with different timestamps serialize differently" do
-      block1 = Block.new([
-        index: 1,
-        previous_hash: <<0::256>>,
-        transactions: [],
-        difficulty: 4,
-        timestamp: 1234567890
-      ])
+      block1 =
+        Block.new(
+          index: 1,
+          previous_hash: <<0::256>>,
+          transactions: [],
+          difficulty: 4,
+          timestamp: 1_234_567_890
+        )
 
-      block2 = Block.new([
-        index: 1,
-        previous_hash: <<0::256>>,
-        transactions: [],
-        difficulty: 4,
-        timestamp: 1234567891  # Different timestamp
-      ])
+      block2 =
+        Block.new(
+          index: 1,
+          previous_hash: <<0::256>>,
+          transactions: [],
+          difficulty: 4,
+          # Different timestamp
+          timestamp: 1_234_567_891
+        )
 
       serialized1 = Mining.serialize_block_for_mining(block1)
       serialized2 = Mining.serialize_block_for_mining(block2)
@@ -180,13 +189,14 @@ defmodule Bastille.Features.Mining.MiningTest do
 
   describe "block hash calculation" do
     test "calculate_block_hash produces consistent hash" do
-      block = Block.new([
-        index: 1,
-        previous_hash: <<0::256>>,
-        transactions: [],
-        difficulty: 4,
-        nonce: 12345
-      ])
+      block =
+        Block.new(
+          index: 1,
+          previous_hash: <<0::256>>,
+          transactions: [],
+          difficulty: 4,
+          nonce: 12345
+        )
 
       hash1 = Mining.calculate_block_hash(block)
       hash2 = Mining.calculate_block_hash(block)
@@ -197,12 +207,13 @@ defmodule Bastille.Features.Mining.MiningTest do
     end
 
     test "different nonces produce different hashes" do
-      base_block = Block.new([
-        index: 1,
-        previous_hash: <<0::256>>,
-        transactions: [],
-        difficulty: 4
-      ])
+      base_block =
+        Block.new(
+          index: 1,
+          previous_hash: <<0::256>>,
+          transactions: [],
+          difficulty: 4
+        )
 
       block1 = %{base_block | header: %{base_block.header | nonce: 1}}
       block2 = %{base_block | header: %{base_block.header | nonce: 2}}
@@ -216,12 +227,13 @@ defmodule Bastille.Features.Mining.MiningTest do
     end
 
     test "validate_block_hash_consistency with nil hash" do
-      block = Block.new([
-        index: 1,
-        previous_hash: <<0::256>>,
-        transactions: [],
-        difficulty: 4
-      ])
+      block =
+        Block.new(
+          index: 1,
+          previous_hash: <<0::256>>,
+          transactions: [],
+          difficulty: 4
+        )
 
       # Block.new should create a block without a hash initially
       block_no_hash = %{block | hash: nil}
@@ -231,13 +243,14 @@ defmodule Bastille.Features.Mining.MiningTest do
     end
 
     test "validate_block_hash_consistency with valid hash" do
-      block = Block.new([
-        index: 1,
-        previous_hash: <<0::256>>,
-        transactions: [],
-        difficulty: 4,
-        nonce: 12345
-      ])
+      block =
+        Block.new(
+          index: 1,
+          previous_hash: <<0::256>>,
+          transactions: [],
+          difficulty: 4,
+          nonce: 12345
+        )
 
       # Calculate the correct hash
       correct_hash = Mining.calculate_block_hash(block)
@@ -252,15 +265,18 @@ defmodule Bastille.Features.Mining.MiningTest do
     test "hash rate calculation" do
       # Mock hash rate calculation
       hashes_computed = 1000
-      time_elapsed_ms = 1000  # 1 second
+      # 1 second
+      time_elapsed_ms = 1000
 
-      hash_rate = if time_elapsed_ms > 0 do
-        round(hashes_computed / time_elapsed_ms * 1000)
-      else
-        0
-      end
+      hash_rate =
+        if time_elapsed_ms > 0 do
+          round(hashes_computed / time_elapsed_ms * 1000)
+        else
+          0
+        end
 
-      assert hash_rate == 1000  # 1000 hashes/second
+      # 1000 hashes/second
+      assert hash_rate == 1000
       assert hash_rate > 0
     end
 
@@ -277,16 +293,20 @@ defmodule Bastille.Features.Mining.MiningTest do
 
     test "difficulty adjustment calculations" do
       # Mock difficulty adjustment
-      target_time = 10_000  # 10 seconds target
-      actual_time = 5_000   # 5 seconds actual
+      # 10 seconds target
+      target_time = 10_000
+      # 5 seconds actual
+      actual_time = 5_000
       current_difficulty = 4
 
       # If blocks are mined too fast, difficulty should increase
       adjustment_factor = actual_time / target_time
       suggested_difficulty = round(current_difficulty / adjustment_factor)
 
-      assert adjustment_factor < 1.0  # Mining too fast
-      assert suggested_difficulty > current_difficulty  # Should increase
+      # Mining too fast
+      assert adjustment_factor < 1.0
+      # Should increase
+      assert suggested_difficulty > current_difficulty
     end
   end
 
@@ -294,7 +314,8 @@ defmodule Bastille.Features.Mining.MiningTest do
     test "validates block hash format" do
       # Test hash format validation
       valid_hash = :crypto.strong_rand_bytes(32)
-      invalid_hash = :crypto.strong_rand_bytes(20)  # Wrong size
+      # Wrong size
+      invalid_hash = :crypto.strong_rand_bytes(20)
 
       assert byte_size(valid_hash) == 32
       assert byte_size(invalid_hash) != 32
@@ -302,7 +323,7 @@ defmodule Bastille.Features.Mining.MiningTest do
 
     test "validates nonce format" do
       # Test nonce validation
-      valid_nonce = 123456
+      valid_nonce = 123_456
       invalid_nonce = -1
 
       assert is_integer(valid_nonce)
@@ -313,8 +334,10 @@ defmodule Bastille.Features.Mining.MiningTest do
     test "validates timestamp reasonableness" do
       # Test timestamp validation
       current_time = System.system_time(:second)
-      recent_time = current_time - 3600  # 1 hour ago
-      future_time = current_time + 3600  # 1 hour future
+      # 1 hour ago
+      recent_time = current_time - 3600
+      # 1 hour future
+      future_time = current_time + 3600
       ancient_time = 0
 
       assert recent_time > ancient_time
@@ -327,7 +350,8 @@ defmodule Bastille.Features.Mining.MiningTest do
     test "revolutionary mining constants" do
       # Test revolutionary-themed constants
       bastille_year = 1789
-      bastille_day = 14  # July 14th
+      # July 14th
+      bastille_day = 14
 
       assert bastille_year == 1789
       assert bastille_day == 14
@@ -364,7 +388,8 @@ defmodule Bastille.Features.Mining.MiningTest do
 
     test "handles very large nonce values" do
       # Test nonce overflow protection
-      large_nonce = 18_446_744_073_709_551_615  # max uint64
+      # max uint64
+      large_nonce = 18_446_744_073_709_551_615
 
       assert is_integer(large_nonce)
       assert large_nonce > 0
@@ -372,14 +397,15 @@ defmodule Bastille.Features.Mining.MiningTest do
 
     test "handles empty block serialization" do
       # Test genesis-like block structure
-      empty_block = Block.new([
-        index: 0,
-        previous_hash: <<0::256>>,
-        transactions: [],
-        difficulty: 1,
-        timestamp: 0,
-        nonce: 0
-      ])
+      empty_block =
+        Block.new(
+          index: 0,
+          previous_hash: <<0::256>>,
+          transactions: [],
+          difficulty: 1,
+          timestamp: 0,
+          nonce: 0
+        )
 
       serialized = Mining.serialize_block_for_mining(empty_block)
       assert is_binary(serialized)

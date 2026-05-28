@@ -10,17 +10,13 @@ crate-type = ["cdylib"]
 
 [dependencies]
 rustler = "0.36.2"
-# Post-quantum cryptography via pqcrypto (wrapper autour de PQClean)
-pqcrypto = "0.18"
-pqcrypto-traits = "0.3"
-pqcrypto-dilithium = "0.5"
-pqcrypto-falcon = "0.4"
-pqcrypto-sphincsplus = "0.7"
-# Pour la génération de clés aléatoires
+# Post-quantum signatures, pure-Rust FIPS-aligned crates with seed-based keygen
+ml-dsa = "0.1.0"
+slh-dsa = "0.1.0"
+fn-dsa = "0.3.0"
+signature = "=2.3.0-pre.4"
+# Deterministic CSPRNG for Falcon seeded keygen + OS RNG for randomized signing
 rand = "0.8"
-# Hash Blake3 pour le mining et les signatures
+rand_chacha = "0.3"
+# Blake3 for mining hashes + SPHINCS sub-seed expansion
 blake3 = "1.3"
-# For global cache in deterministic key generation
-lazy_static = "1.4"
-# For encoding cache file names
-hex = "0.4"

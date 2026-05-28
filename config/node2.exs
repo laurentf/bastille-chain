@@ -19,7 +19,8 @@ config :bastille,
     enabled: true,
     listen_port: 8002,
     max_peers: 10,
-    bootstrap_peers: [{"127.0.0.1", 8001}]  # Connect to node1
+    # Connect to node1
+    bootstrap_peers: [{"127.0.0.1", 8001}]
   ],
 
   # Mining disabled on node2 (pure relay)
