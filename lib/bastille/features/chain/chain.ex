@@ -464,6 +464,8 @@ defmodule Bastille.Features.Chain.Chain do
       Task.start(fn -> GenServer.call(__MODULE__, {:add_block, orphan_block}) end)
     end)
 
+    purge_block_txs_from_mempool(block)
+
     # Best-effort broadcast
     try do
       Bastille.Features.P2P.PeerManagement.Node.broadcast_block(block)
@@ -474,6 +476,22 @@ defmodule Bastille.Features.Chain.Chain do
     end
 
     new_state
+  end
+
+  # A confirmed block's transactions must leave the mempool on every node that
+  # applies it — not only the miner — so they stop showing as pending and can't
+  # be re-mined. Coinbase txs are never in the mempool, so most (coinbase-only)
+  # blocks skip the mempool call entirely.
+  defp purge_block_txs_from_mempool(%Bastille.Features.Block.Block{transactions: txs}) do
+    case Enum.reject(txs, &(&1.signature_type == :coinbase)) do
+      [] ->
+        :ok
+
+      user_txs ->
+        user_txs
+        |> Enum.map(& &1.hash)
+        |> Bastille.Features.Transaction.Mempool.remove_transactions()
+    end
   end
 
   defp handle_orphan_add(%Bastille.Features.Block.Block{} = block) do

@@ -109,6 +109,14 @@ defmodule Bastille.P2P.Proto.BlockHeader do
   field(:consensus_data, 7, type: :bytes)
 end
 
+defmodule Bastille.P2P.Proto.PublicKeys do
+  @moduledoc false
+  use Protobuf, syntax: :proto3
+  field(:dilithium, 1, type: :bytes)
+  field(:falcon, 2, type: :bytes)
+  field(:sphincs, 3, type: :bytes)
+end
+
 defmodule Bastille.P2P.Proto.Transaction do
   @moduledoc false
   use Protobuf, syntax: :proto3
@@ -122,6 +130,7 @@ defmodule Bastille.P2P.Proto.Transaction do
   field(:signature, 8, type: :bytes)
   field(:signature_type, 9, type: :string)
   field(:hash, 10, type: :bytes)
+  field(:public_keys, 11, type: Bastille.P2P.Proto.PublicKeys)
 end
 
 defmodule Bastille.P2P.Proto.Block do

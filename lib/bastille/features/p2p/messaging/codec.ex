@@ -302,6 +302,7 @@ defmodule Bastille.Features.P2P.Messaging.Codec do
       data: tx.data,
       signature: :erlang.term_to_binary(tx.signature),
       signature_type: to_string(tx.signature_type),
+      public_keys: to_public_keys(tx.public_keys),
       hash: tx.hash || <<>>
     }
   end
@@ -317,6 +318,7 @@ defmodule Bastille.Features.P2P.Messaging.Codec do
       data: m["data"] || <<>>,
       signature: normalize_sig_bytes(m["signature"]),
       signature_type: to_string(m["signature_type"]),
+      public_keys: to_public_keys(m["public_keys"]),
       # No normalization
       hash: m["hash"] || <<>>
     }
@@ -411,6 +413,7 @@ defmodule Bastille.Features.P2P.Messaging.Codec do
       "data" => t.data,
       "signature" => safe_binary_to_term(t.signature),
       "signature_type" => t.signature_type,
+      "public_keys" => from_public_keys(t.public_keys),
       # Keep hash as-is - no encoding
       "hash" => t.hash
     }
@@ -468,6 +471,22 @@ defmodule Bastille.Features.P2P.Messaging.Codec do
   defp normalize_sig_bytes(nil), do: <<>>
   defp normalize_sig_bytes(bin) when is_binary(bin), do: bin
   defp normalize_sig_bytes(map) when is_map(map), do: :erlang.term_to_binary(map)
+
+  # Public keys ride in a structured sub-message (plain bytes, no ETF) so the
+  # wire stays canonical. Absent on coinbase/unsigned txs → nil on both sides.
+  defp to_public_keys(%{dilithium: d, falcon: f, sphincs: s})
+       when is_binary(d) and is_binary(f) and is_binary(s) do
+    %Proto.PublicKeys{dilithium: d, falcon: f, sphincs: s}
+  end
+
+  defp to_public_keys(_), do: nil
+
+  defp from_public_keys(%Proto.PublicKeys{dilithium: d, falcon: f, sphincs: s})
+       when byte_size(d) > 0 and byte_size(f) > 0 and byte_size(s) > 0 do
+    %{dilithium: d, falcon: f, sphincs: s}
+  end
+
+  defp from_public_keys(_), do: nil
 
   # `:safe` is critical here: this decodes bytes from untrusted peers, and a raw
   # binary_to_term lets a hostile peer mint arbitrary atoms → atom-table

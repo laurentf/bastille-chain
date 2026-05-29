@@ -297,6 +297,23 @@ defmodule Bastille.Shared.Crypto do
     derive_bastille_address_from_public_keys(dil_pub, fal_pub, sph_pub)
   end
 
+  @doc """
+  Derive the Bastille address that a bare public-keys map hashes to.
+
+  The address is `prefix <> first20(sha256(dilithium <> falcon <> sphincs))`,
+  so an address binds its three public keys. Verifiers use this to reject a
+  transaction whose embedded public keys do not hash to its `from` address.
+  """
+  @spec address_from_public_keys(%{
+          dilithium: binary(),
+          falcon: binary(),
+          sphincs: binary()
+        }) :: String.t()
+  def address_from_public_keys(%{dilithium: dil_pub, falcon: fal_pub, sphincs: sph_pub})
+      when is_binary(dil_pub) and is_binary(fal_pub) and is_binary(sph_pub) do
+    derive_bastille_address_from_public_keys(dil_pub, fal_pub, sph_pub)
+  end
+
   defp derive_bastille_address_from_public_keys(dil_pub, fal_pub, sph_pub) do
     # Combine all three public keys
     combined_pubkeys = dil_pub <> fal_pub <> sph_pub

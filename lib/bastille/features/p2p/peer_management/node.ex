@@ -16,19 +16,18 @@ defmodule Bastille.Features.P2P.PeerManagement.Node do
   alias Bastille.Features.P2P.Messaging.Messages
   alias Bastille.Features.P2P.Synchronization.Sync
   alias Bastille.Features.Block.Block
+  alias Bastille.Features.Block.BlockConverter
+  alias Bastille.Features.Chain.Chain
   alias Bastille.Features.Transaction.Transaction
   alias Bastille.Features.Transaction.Mempool
   alias Bastille.Features.Transaction.TransactionConverter
-  alias Bastille.Features.Chain.ReorgSearch
-  alias Bastille.Infrastructure.Storage.CubDB.Chain, as: ChainStorage
+  alias Bastille.Features.P2P.Synchronization.OrphanCoordinator
 
   @max_peers 8
   # 30 seconds
   @retry_interval 30_000
   @ping_interval 30_000
   @pong_timeout 60_000
-  # per-parent getdata deadline during a reorg search
-  @reorg_request_timeout_ms 10_000
 
   defstruct [
     :listen_socket,
@@ -356,7 +355,7 @@ defmodule Bastille.Features.P2P.PeerManagement.Node do
     # Send height message to discover peer's blockchain height
     local_height =
       try do
-        Bastille.Features.Chain.Chain.get_height()
+        Chain.get_height()
       catch
         :exit, _ -> state.last_known_height
       end
@@ -423,20 +422,9 @@ defmodule Bastille.Features.P2P.PeerManagement.Node do
     {:noreply, new_state}
   end
 
-  def handle_info(
-        {:reorg_search_timeout, tip_hash},
-        %__MODULE__{reorg_search: %ReorgSearch{tip_hash: tip_hash} = search} = state
-      ) do
-    {:abort, :timeout, _} = ReorgSearch.timeout(search)
-
-    Logger.warning(
-      "❌ REORG SEARCH ABANDONED — parent fetch timed out after #{div(@reorg_request_timeout_ms, 1000)}s (tip #{encode_hash(tip_hash)}, depth #{search.depth})"
-    )
-
-    {:noreply, %{state | reorg_search: nil, reorg_timeout_ref: nil}}
+  def handle_info({:reorg_search_timeout, tip_hash}, %__MODULE__{} = state) do
+    {:noreply, OrphanCoordinator.handle_timeout(tip_hash, state)}
   end
-
-  def handle_info({:reorg_search_timeout, _tip_hash}, state), do: {:noreply, state}
 
   def handle_info(msg, state) do
     Logger.debug("🤷 Unknown message: #{inspect(msg)}")
@@ -593,10 +581,10 @@ defmodule Bastille.Features.P2P.PeerManagement.Node do
     Logger.info("📦 Received block from #{from_address}:#{from_port}")
 
     # Convert and validate P2P block data
-    case Bastille.Features.Block.BlockConverter.from_p2p_data(block_data) do
+    case BlockConverter.from_p2p_data(block_data) do
       {:ok, block} ->
-        if reorg_awaited?(block, state) do
-          handle_reorg_parent(block, from_address, from_port, state)
+        if OrphanCoordinator.reorg_awaited?(block, state) do
+          OrphanCoordinator.handle_reorg_parent(block, from_address, from_port, state)
         else
           handle_new_block(block, from_address, from_port, state)
         end
@@ -686,7 +674,7 @@ defmodule Bastille.Features.P2P.PeerManagement.Node do
 
   # Helpers extracted from process_p2p_message clauses (kept after all clauses to satisfy grouping)
   defp handle_new_block(%Block{} = block, from_address, from_port, state) do
-    case Bastille.Features.Chain.Chain.add_block(block) do
+    case Chain.add_block(block) do
       :ok ->
         Logger.info(
           "✅ Block #{block.header.index} (#{encode_hash(block.hash)}) accepted and added to blockchain"
@@ -713,7 +701,7 @@ defmodule Bastille.Features.P2P.PeerManagement.Node do
         )
 
         new_state = %{state | blocks_seen: MapSet.put(state.blocks_seen, block.hash)}
-        maybe_start_reorg_search(block, from_address, from_port, new_state)
+        OrphanCoordinator.handle_orphan(block, from_address, from_port, new_state)
 
       {:orphan, parent_hash} when is_binary(parent_hash) ->
         Logger.info(
@@ -721,7 +709,7 @@ defmodule Bastille.Features.P2P.PeerManagement.Node do
         )
 
         new_state = %{state | blocks_seen: MapSet.put(state.blocks_seen, block.hash)}
-        maybe_start_reorg_search(block, from_address, from_port, new_state)
+        OrphanCoordinator.handle_orphan(block, from_address, from_port, new_state)
 
       {:error, reason} ->
         Logger.warning(
@@ -776,7 +764,7 @@ defmodule Bastille.Features.P2P.PeerManagement.Node do
          from_address,
          from_port
        ) do
-    case Bastille.Features.Chain.Chain.get_block(hash) do
+    case Chain.get_block(hash) do
       %Bastille.Features.Block.Block{} = block ->
         Logger.info("📤 Sending block #{encode_hash(block.hash)} to #{from_address}:#{from_port}")
         block_msg = Messages.block_message(block)
@@ -852,208 +840,5 @@ defmodule Bastille.Features.P2P.PeerManagement.Node do
 
   defp encode_hash(hash) when is_binary(hash) do
     Base.encode16(hash, case: :lower) |> String.slice(0, 12)
-  end
-
-  # moved header helpers into Sync
-
-  defp request_parent_if_needed(from_address, from_port, parent_hash, state) do
-    cond do
-      not is_binary(parent_hash) ->
-        state
-
-      MapSet.member?(state.blocks_seen, parent_hash) ->
-        state
-
-      MapSet.member?(state.requested_blocks, parent_hash) ->
-        state
-
-      true ->
-        case find_peer_by_address(from_address, from_port, state) do
-          nil ->
-            :ok
-
-          peer_pid ->
-            Logger.info("🧩 Requesting parent block #{encode_hash(parent_hash)}")
-            getdata_msg = Messages.getdata_message([{:block, parent_hash}])
-            _ = Peer.send_message(peer_pid, :getdata, getdata_msg[:getdata])
-        end
-
-        %{state | requested_blocks: MapSet.put(state.requested_blocks, parent_hash)}
-    end
-  end
-
-  # --- Reorg common-ancestor search (Sprint 4.3) -------------------------------
-
-  defp reorg_awaited?(%Block{} = block, %__MODULE__{
-         reorg_search: %ReorgSearch{awaiting: awaiting}
-       }),
-       do: block.hash == awaiting
-
-  defp reorg_awaited?(_block, _state), do: false
-
-  defp maybe_start_reorg_search(
-         %Block{} = orphan,
-         from_address,
-         from_port,
-         %__MODULE__{reorg_search: %ReorgSearch{}} = state
-       ) do
-    request_parent_if_needed(from_address, from_port, orphan.header.previous_hash, state)
-  end
-
-  defp maybe_start_reorg_search(%Block{} = orphan, from_address, from_port, %__MODULE__{} = state) do
-    {:request, parent_hash, search} = ReorgSearch.start(orphan, local_work: local_tip_work())
-    log_reorg_initiated(orphan, search, from_address, from_port)
-
-    case send_getdata_for(parent_hash, from_address, from_port, state) do
-      :ok ->
-        ref =
-          Process.send_after(
-            self(),
-            {:reorg_search_timeout, orphan.hash},
-            @reorg_request_timeout_ms
-          )
-
-        %{
-          state
-          | reorg_search: search,
-            reorg_timeout_ref: ref,
-            requested_blocks: MapSet.put(state.requested_blocks, parent_hash)
-        }
-
-      :error ->
-        state
-    end
-  end
-
-  defp handle_reorg_parent(%Block{} = block, from_address, from_port, %__MODULE__{} = state) do
-    state = cancel_reorg_timer(state)
-    _ = Bastille.Features.Chain.Chain.add_block(block)
-    state = %{state | blocks_seen: MapSet.put(state.blocks_seen, block.hash)}
-
-    ancestor_work = known_ancestor_work(block.header.previous_hash)
-
-    case ReorgSearch.advance(state.reorg_search, block, ancestor_work) do
-      {:request, next, search} ->
-        request_next_parent(next, search, from_address, from_port, state)
-
-      {:found, %{better?: true} = result} ->
-        log_reorg_found(result)
-        # The switch (rollback + reapply) can apply up to MAX_REORG_DEPTH blocks;
-        # run it off the Node process so message handling isn't blocked.
-        Task.start(fn -> Bastille.Features.Chain.Chain.reorganize(result) end)
-        clear_reorg_search(state)
-
-      {:found, result} ->
-        log_reorg_found(result)
-        clear_reorg_search(state)
-
-      {:abort, :max_depth_exceeded, search} ->
-        Logger.warning(
-          "❌ REORG SEARCH ABANDONED — fork deeper than max depth #{search.max_depth} (tip #{encode_hash(search.tip_hash)})"
-        )
-
-        clear_reorg_search(state)
-
-      {:ignore, _search} ->
-        state
-    end
-  end
-
-  # Fetch the next parent up the fork, arming the per-request timeout; abandon
-  # the search if the peer is unreachable.
-  defp request_next_parent(next, search, from_address, from_port, %__MODULE__{} = state) do
-    case send_getdata_for(next, from_address, from_port, state) do
-      :ok ->
-        ref =
-          Process.send_after(
-            self(),
-            {:reorg_search_timeout, search.tip_hash},
-            @reorg_request_timeout_ms
-          )
-
-        %{
-          state
-          | reorg_search: search,
-            reorg_timeout_ref: ref,
-            requested_blocks: MapSet.put(state.requested_blocks, next)
-        }
-
-      :error ->
-        Logger.warning(
-          "❌ REORG SEARCH ABANDONED — peer unreachable for parent #{encode_hash(next)}"
-        )
-
-        clear_reorg_search(state)
-    end
-  end
-
-  defp send_getdata_for(hash, from_address, from_port, state) do
-    case find_peer_by_address(from_address, from_port, state) do
-      nil ->
-        :error
-
-      peer_pid ->
-        getdata_msg = Messages.getdata_message([{:block, hash}])
-        _ = Peer.send_message(peer_pid, :getdata, getdata_msg[:getdata])
-        :ok
-    end
-  end
-
-  defp local_tip_work do
-    with {:ok, {_height, head_hash}} <- ChainStorage.get_head(),
-         {:ok, work} <- ChainStorage.get_cumulative_work(head_hash) do
-      work
-    else
-      _ -> 0
-    end
-  end
-
-  defp known_ancestor_work(hash) do
-    case ChainStorage.get_cumulative_work(hash) do
-      {:ok, work} -> work
-      {:error, :not_found} -> nil
-    end
-  end
-
-  defp cancel_reorg_timer(%__MODULE__{reorg_timeout_ref: nil} = state), do: state
-
-  defp cancel_reorg_timer(%__MODULE__{reorg_timeout_ref: ref} = state) do
-    _ = Process.cancel_timer(ref)
-    %{state | reorg_timeout_ref: nil}
-  end
-
-  defp clear_reorg_search(%__MODULE__{} = state) do
-    state |> cancel_reorg_timer() |> Map.put(:reorg_search, nil)
-  end
-
-  defp log_reorg_initiated(%Block{} = orphan, %ReorgSearch{} = search, from_address, from_port) do
-    Logger.info("🔄 ═══════════════ REORG SEARCH INITIATED ═══════════════")
-    Logger.info("   ├─ from_peer:    #{from_address}:#{from_port}")
-    Logger.info("   ├─ tip_hash:     #{encode_hash(orphan.hash)}")
-    Logger.info("   ├─ tip_work:     #{search.acc_work}")
-    Logger.info("   ├─ local_work:   #{search.local_work}")
-    Logger.info("   └─ depth_so_far: #{search.depth}")
-  end
-
-  defp log_reorg_found(%{better?: true} = result) do
-    Logger.info(
-      "✅ REORG SEARCH SUCCESS — common ancestor #{encode_hash(result.ancestor_hash)} found at depth #{result.depth}"
-    )
-
-    Logger.info("   ├─ alt_work:   #{result.alt_work} (wins)")
-    Logger.info("   ├─ local_work: #{result.local_work}")
-
-    Logger.info(
-      "   └─ action:     triggering rollback + reapply of #{length(result.fork_chain)} block(s)"
-    )
-  end
-
-  defp log_reorg_found(%{better?: false} = result) do
-    Logger.info(
-      "🛑 REORG SEARCH — common ancestor #{encode_hash(result.ancestor_hash)} found at depth #{result.depth}, but alternative chain has less work"
-    )
-
-    Logger.info("   ├─ alt_work:   #{result.alt_work}")
-    Logger.info("   └─ local_work: #{result.local_work} (kept)")
   end
 end

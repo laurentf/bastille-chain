@@ -34,6 +34,10 @@ defmodule Bastille.Features.Transaction.Transaction do
           signature: map() | nil,
           # :post_quantum_2_of_3 | :secp256k1
           signature_type: atom(),
+          # Sender's 3 PQ public keys, carried so any node can verify the
+          # signature without prior knowledge of the sender. Bound to `from`
+          # (see verify_signature/1); excluded from the hash and signed message.
+          public_keys: %{dilithium: binary(), falcon: binary(), sphincs: binary()} | nil,
           # Transaction hash
           hash: binary() | nil
         }
@@ -49,6 +53,7 @@ defmodule Bastille.Features.Transaction.Transaction do
     :data,
     :signature,
     :signature_type,
+    :public_keys,
     :hash
   ]
 
@@ -254,7 +259,7 @@ defmodule Bastille.Features.Transaction.Transaction do
     Logger.debug("   └─ chain_id: #{chain_id_bytes()}")
     Logger.debug("   └─ fee: #{tx.fee} juillet, data_size: #{byte_size(tx.data || <<>>)} bytes")
 
-    case State.get_public_keys(tx.from) do
+    case resolve_public_keys(tx) do
       {:ok, public_keys} ->
         case Crypto.verify(message, tx.signature, public_keys) do
           true ->
@@ -264,6 +269,13 @@ defmodule Bastille.Features.Transaction.Transaction do
             Logger.warning("⚠️ Tx signature invalid for #{encode_hash(tx.hash)} (from #{tx.from})")
             false
         end
+
+      {:error, :embedded_key_mismatch} ->
+        Logger.warning(
+          "⚠️ Tx rejected: embedded public keys do not hash to sender #{tx.from} (#{encode_hash(tx.hash)})"
+        )
+
+        false
 
       {:error, :not_found} ->
         Logger.warning("⚠️ Tx signature unverifiable: no public keys stored for #{tx.from}")
@@ -282,6 +294,23 @@ defmodule Bastille.Features.Transaction.Transaction do
   # All transactions must use post-quantum signatures
 
   def verify_signature(_), do: false
+
+  # Embedded keys are trusted only once proven to hash to `from`; without that
+  # check an attacker could attach their own keys + signature and impersonate any
+  # address. Falls back to locally-stored keys when the tx carries none.
+  defp resolve_public_keys(%__MODULE__{
+         public_keys: %{dilithium: d, falcon: f, sphincs: s} = public_keys,
+         from: from
+       })
+       when is_binary(d) and is_binary(f) and is_binary(s) do
+    if Crypto.address_from_public_keys(public_keys) == Address.canonical(from) do
+      {:ok, public_keys}
+    else
+      {:error, :embedded_key_mismatch}
+    end
+  end
+
+  defp resolve_public_keys(%__MODULE__{from: from}), do: State.get_public_keys(from)
 
   defp encode_hash(hash) when is_binary(hash),
     do: hash |> Base.encode16(case: :lower) |> String.slice(0, 16)
@@ -339,6 +368,8 @@ defmodule Bastille.Features.Transaction.Transaction do
       "hash" => encode_binary(tx.hash)
     }
 
+    base = maybe_put_public_keys(base, tx.public_keys)
+
     case tx.signature do
       nil ->
         base
@@ -381,7 +412,8 @@ defmodule Bastille.Features.Transaction.Transaction do
          {:ok, data} <- fetch_optional_string(m, "data"),
          {:ok, sig_type} <- fetch_signature_type(m),
          {:ok, hash} <- fetch_hex_bytes(m, "hash", 32),
-         {:ok, signature} <- fetch_signature(m, sig_type) do
+         {:ok, signature} <- fetch_signature(m, sig_type),
+         {:ok, public_keys} <- fetch_public_keys(m) do
       {:ok,
        %__MODULE__{
          from: from,
@@ -393,7 +425,8 @@ defmodule Bastille.Features.Transaction.Transaction do
          data: data,
          signature_type: sig_type,
          hash: hash,
-         signature: signature
+         signature: signature,
+         public_keys: public_keys
        }}
     end
   end
@@ -530,6 +563,37 @@ defmodule Bastille.Features.Transaction.Transaction do
 
   defp encode_binary(nil), do: ""
   defp encode_binary(b) when is_binary(b), do: Base.encode16(b, case: :lower)
+
+  defp maybe_put_public_keys(base, %{dilithium: d, falcon: f, sphincs: s})
+       when is_binary(d) and is_binary(f) and is_binary(s) do
+    Map.put(base, "public_keys", %{
+      "dilithium" => encode_binary(d),
+      "falcon" => encode_binary(f),
+      "sphincs" => encode_binary(s)
+    })
+  end
+
+  defp maybe_put_public_keys(base, _), do: base
+
+  # Optional on the wire: unsigned transactions carry none, signed ones embed
+  # the sender's three public keys so receiving nodes can verify them.
+  defp fetch_public_keys(m) do
+    case Map.get(m, "public_keys") do
+      nil ->
+        {:ok, nil}
+
+      %{"dilithium" => d, "falcon" => f, "sphincs" => s}
+      when is_binary(d) and is_binary(f) and is_binary(s) ->
+        with {:ok, dilithium} <- decode_hex(d),
+             {:ok, falcon} <- decode_hex(f),
+             {:ok, sphincs} <- decode_hex(s) do
+          {:ok, %{dilithium: dilithium, falcon: falcon, sphincs: sphincs}}
+        end
+
+      _ ->
+        {:error, :invalid_public_keys_shape}
+    end
+  end
 
   defp fetch_address(m, key) do
     case Map.get(m, key) do

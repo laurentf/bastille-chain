@@ -26,6 +26,7 @@ defmodule Bastille.Features.Transaction.TransactionConverter do
          {:ok, hash} <- extract_hash(tx_data, ["hash", :hash]),
          {:ok, signature_type} <- extract_signature_type(tx_data),
          {:ok, signature} <- extract_signature(tx_data),
+         {:ok, public_keys} <- extract_public_keys(tx_data),
          {:ok, data} <- extract_data(tx_data) do
       tx = %Transaction{
         from: from,
@@ -37,6 +38,7 @@ defmodule Bastille.Features.Transaction.TransactionConverter do
         hash: hash,
         signature_type: signature_type,
         signature: signature,
+        public_keys: public_keys,
         data: data
       }
 
@@ -89,6 +91,22 @@ defmodule Bastille.Features.Transaction.TransactionConverter do
     case find_value(data, ["signature", :signature]) do
       signature when is_map(signature) -> {:ok, signature}
       _ -> {:error, :invalid_signature}
+    end
+  end
+
+  # Optional. Authenticity is enforced by Transaction.verify_signature (keys
+  # must hash to `from`), so we only validate shape here.
+  defp extract_public_keys(data) do
+    case find_value(data, ["public_keys", :public_keys]) do
+      nil ->
+        {:ok, nil}
+
+      %{dilithium: d, falcon: f, sphincs: s}
+      when is_binary(d) and is_binary(f) and is_binary(s) ->
+        {:ok, %{dilithium: d, falcon: f, sphincs: s}}
+
+      _ ->
+        {:error, :invalid_public_keys}
     end
   end
 

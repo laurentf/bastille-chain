@@ -19,10 +19,11 @@ defmodule Bastille.Features.P2P.Synchronization.Sync do
   alias Bastille.Features.P2P.Messaging.Messages
   alias Bastille.Features.P2P.PeerManagement.Node
 
-  # Sync configuration constants (will be used in headers-first implementation)
-  # @sync_batch_size 500      # Blocks to request at once
-  # @sync_timeout 30_000      # 30 seconds timeout per batch
-  # @max_sync_peers 3         # Max peers to sync from simultaneously
+  # Header window served per getheaders (mirrors handle_getheaders_request's
+  # start+200 cap) and the cadence at which catch-up pulls the next batch while
+  # still behind a peer.
+  @sync_batch_span 200
+  @sync_tick_ms 1_500
 
   defstruct [
     # Current local blockchain height
@@ -42,7 +43,9 @@ defmodule Bastille.Features.P2P.Synchronization.Sync do
     # Statistics for monitoring
     :sync_stats,
     # Track requested block hashes
-    requested_blocks: MapSet.new()
+    requested_blocks: MapSet.new(),
+    # Highest height already requested in the current catch-up (batch high-water)
+    requested_to: 0
   ]
 
   @type t :: %__MODULE__{
@@ -259,6 +262,31 @@ defmodule Bastille.Features.P2P.Synchronization.Sync do
     {:noreply, new_state}
   end
 
+  # Drives catch-up forward: once the current batch has been applied (local
+  # reached the high-water) and we are still behind, pull the next header range.
+  # Stops ticking when caught up or no longer syncing. This is what turns a
+  # detected gap into a back-fill instead of a stall.
+  def handle_info(:sync_tick, %__MODULE__{sync_state: :syncing} = state) do
+    local = safe_get_height()
+
+    cond do
+      local >= state.target_height ->
+        Logger.info("✅ Caught up to peer tip (height #{local})")
+        {:noreply, %{state | sync_state: :idle, local_height: local}}
+
+      local >= state.requested_to ->
+        request_headers_from_peers(filter_sync_capable_peers(Node.get_peers()))
+        schedule_sync_tick()
+        {:noreply, %{state | local_height: local, requested_to: local + @sync_batch_span}}
+
+      true ->
+        schedule_sync_tick()
+        {:noreply, %{state | local_height: local}}
+    end
+  end
+
+  def handle_info(:sync_tick, state), do: {:noreply, state}
+
   def handle_info({:sync_timeout, range}, state) do
     Logger.warning("⏰ Sync timeout for range #{inspect(range)}")
     new_state = handle_sync_timeout(range, state)
@@ -319,15 +347,20 @@ defmodule Bastille.Features.P2P.Synchronization.Sync do
 
       false ->
         Logger.info("🔗 Found #{length(sync_peers)} sync-capable peers")
+        local = safe_get_height()
         request_headers_from_peers(sync_peers)
+        schedule_sync_tick()
 
         %{
           state
           | sync_state: :syncing,
+            requested_to: local + @sync_batch_span,
             sync_peers: Enum.into(sync_peers, %{}, fn peer -> {peer.peer_id, peer} end)
         }
     end
   end
+
+  defp schedule_sync_tick, do: Process.send_after(self(), :sync_tick, @sync_tick_ms)
 
   defp check_and_start_sync_if_needed(state) do
     peers = Node.get_peers()

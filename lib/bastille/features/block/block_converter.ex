@@ -118,7 +118,8 @@ defmodule Bastille.Features.Block.BlockConverter do
          {:ok, hash} <- extract_hash_field(tx_data, ["hash", :hash]),
          {:ok, signature_type} <- extract_signature_type(tx_data),
          {:ok, data} <- extract_string_optional(tx_data, ["data", :data]),
-         {:ok, signature} <- extract_signature_field(tx_data) do
+         {:ok, signature} <- extract_signature_field(tx_data),
+         {:ok, public_keys} <- extract_public_keys(tx_data) do
       transaction = %Bastille.Features.Transaction.Transaction{
         from: from,
         to: to,
@@ -129,6 +130,7 @@ defmodule Bastille.Features.Block.BlockConverter do
         hash: hash,
         signature_type: signature_type,
         signature: signature,
+        public_keys: public_keys,
         data: data || ""
       }
 
@@ -209,14 +211,29 @@ defmodule Bastille.Features.Block.BlockConverter do
   end
 
   defp extract_signature_type(data) do
-    case find_value(data, ["signature_type", :signature_type]) do
+    # Arrives as a proto3 string over P2P; normalize so string and atom forms
+    # share one clause. post_quantum_2_of_3 is what signed user txs carry.
+    case to_string(find_value(data, ["signature_type", :signature_type]) || "regular") do
       "coinbase" -> {:ok, :coinbase}
-      :coinbase -> {:ok, :coinbase}
       "regular" -> {:ok, :regular}
-      :regular -> {:ok, :regular}
-      # Default
-      nil -> {:ok, :regular}
+      "post_quantum_2_of_3" -> {:ok, :post_quantum_2_of_3}
       other -> {:error, {:invalid_signature_type, other}}
+    end
+  end
+
+  # Optional. Authenticity is enforced by Transaction.verify_signature (keys
+  # must hash to `from`), so we only validate shape here.
+  defp extract_public_keys(data) do
+    case find_value(data, ["public_keys", :public_keys]) do
+      nil ->
+        {:ok, nil}
+
+      %{dilithium: d, falcon: f, sphincs: s}
+      when is_binary(d) and is_binary(f) and is_binary(s) ->
+        {:ok, %{dilithium: d, falcon: f, sphincs: s}}
+
+      _ ->
+        {:error, :invalid_public_keys}
     end
   end
 

@@ -109,7 +109,10 @@ defmodule Bastille.Features.P2P.Messaging.Messages do
         # part of the signed message - must travel with the tx
         data: tx.data,
         signature: tx.signature,
-        signature_type: tx.signature_type
+        signature_type: tx.signature_type,
+        # lets receiving nodes verify the signature without prior knowledge of
+        # the sender (the embedded keys must hash to `from`)
+        public_keys: tx.public_keys
       }
     }
   end

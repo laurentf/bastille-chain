@@ -164,10 +164,7 @@ defmodule Bastille.Features.Mining.MiningCoordinator do
       {:ok, block} ->
         case Chain.add_block(block) do
           :ok ->
-            # Remove mined transactions from mempool
-            tx_hashes = Enum.map(block.transactions, & &1.hash)
-            Mempool.remove_transactions(tx_hashes)
-
+            # Chain.add_block purges the block's txs from the mempool.
             Logger.info("Successfully mined block #{block.header.index}")
             {:reply, {:ok, block}, state}
 
@@ -217,12 +214,7 @@ defmodule Bastille.Features.Mining.MiningCoordinator do
         # Submit to blockchain
         case Bastille.Features.Chain.Chain.add_block(block) do
           :ok ->
-            block.transactions
-            |> Enum.map(& &1.hash)
-            |> tap(&Mempool.remove_transactions/1)
-            |> length()
-            |> then(&Logger.info("🗑️ Mempool cleanup: #{&1} transactions removed"))
-
+            # Chain.add_block purges the block's txs from the mempool.
             schedule_next(state, 100)
 
           {:orphan, :added_to_pool} ->

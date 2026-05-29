@@ -56,7 +56,9 @@ defmodule Bastille.Features.Api.RPC.SignTransaction do
          {:ok, public_keys} <- Crypto.get_public_keys_for_address(unsigned_tx.from),
          keypair <- build_keypair(dil_key, fal_key, sph_key, public_keys),
          :ok <- verify_ownership(keypair, unsigned_tx.from) do
-      signed_tx = Transaction.sign(unsigned_tx, keypair)
+      # Embed the sender's public keys so any node can verify the signature
+      # without having seen this address before (they bind to `from`).
+      signed_tx = %{Transaction.sign(unsigned_tx, keypair) | public_keys: public_keys}
 
       Logger.info("✍️ Tx signed for #{unsigned_tx.from}")
 
