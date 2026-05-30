@@ -1,4 +1,4 @@
-# Bastille Blockchain - Cursor AI Rules
+# Bastille Blockchain — Coding Conventions
 
 ## Project Context
 You are working on **Bastille**, a post-quantum blockchain written in Elixir with the following key characteristics:
@@ -68,7 +68,7 @@ You are working on **Bastille**, a post-quantum blockchain written in Elixir wit
 ### Cryptographic Operations
 - **Always validate inputs** before cryptographic operations
 - **Use pattern matching** for key types: `%{dilithium: dil_key, falcon: fal_key, sphincs: sph_key}`
-- **Handle key size validation** with constants from `Bastille.Core.Crypto`
+- **Handle key size validation** with constants from `Bastille.Shared.Crypto`
 - **Separate key generation** from address derivation logic
 
 ### Transaction Handling
@@ -94,22 +94,27 @@ You are working on **Bastille**, a post-quantum blockchain written in Elixir wit
 ### Module Organization
 ```
 lib/bastille/
-├── core/           # Pure functions, data structures
-├── economics/      # Tokenomics, constants, burn tracking
-├── storage/        # Database interfaces (4-database architecture)
-├── consensus/      # Mining, validation, difficulty adjustment
-├── blockchain/     # Chain state management
-├── mempool/        # Transaction pool
-├── p2p/           # Network communication
-├── rpc/           # JSON-RPC API endpoints
-└── validator/     # Block production, mining coordination
+├── application.ex          # OTP supervision tree
+├── shared/                 # Pure helpers, data types (crypto, address, mnemonic, seed, constants, types)
+├── infrastructure/         # Side-effecting infra
+│   ├── crypto/             # Rust NIF bindings (Bastille.Infrastructure.Crypto.CryptoNif)
+│   └── storage/cubdb/      # 4-database storage (blocks, chain, state, index)
+└── features/               # Domain features
+    ├── block/              # Block struct, merkle root, hashing
+    ├── chain/              # Chain state, reorg (Chain, ReorgSearch, OrphanManager, TransactionValidator)
+    ├── transaction/        # Transaction struct, mempool, converter
+    ├── consensus/          # Consensus engine + behaviour
+    ├── mining/             # Blake3 PoW, mining coordinator
+    ├── tokenomics/         # Rewards, fees, conversions
+    ├── p2p/                # Network: messaging, peer management, synchronization
+    └── api/                # JSON-RPC endpoints
 ```
 
 ### Dependency Direction
-- **Core modules**: No dependencies on other Bastille modules
-- **Economics**: Only depends on core
-- **Storage**: Only depends on core
-- **Higher-level modules**: Can depend on core, economics, storage
+- **`shared/`**: pure, no dependencies on other Bastille modules.
+- **`infrastructure/`**: depends only on `shared/`.
+- **`features/`**: may depend on `shared/` and `infrastructure/`; cross-feature
+  dependencies go through public APIs, not internals.
 
 ## Code Quality Standards
 

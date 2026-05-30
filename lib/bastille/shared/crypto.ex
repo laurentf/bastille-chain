@@ -15,18 +15,18 @@ defmodule Bastille.Shared.Crypto do
   alias Bastille.Infrastructure.Storage.CubDB.State
 
   @type pq_keypair :: %{
-    dilithium: %{public: binary(), private: binary()},
-    falcon: %{public: binary(), private: binary()},
-    sphincs: %{public: binary(), private: binary()}
-  }
+          dilithium: %{public: binary(), private: binary()},
+          falcon: %{public: binary(), private: binary()},
+          sphincs: %{public: binary(), private: binary()}
+        }
 
   @type keypair :: %{public: binary(), private: binary()}
 
   @type signature :: %{
-    dilithium: binary(),
-    falcon: binary(),
-    sphincs: binary()
-  }
+          dilithium: binary(),
+          falcon: binary(),
+          sphincs: binary()
+        }
 
   # === Key Generation ===
 
@@ -112,10 +112,30 @@ defmodule Bastille.Shared.Crypto do
     %{public: public_key, private: private_key}
   end
 
-  # Derive algorithm-specific seed using HKDF-like process.
+  # Derive a 32-byte algorithm-specific sub-seed via HKDF-SHA256 (RFC 5869),
+  # domain-separated by the Bastille salt and the algorithm name.
+  @hkdf_salt "bastille-v1"
   @spec derive_algorithm_seed(binary(), String.t()) :: binary()
   defp derive_algorithm_seed(master_seed, algorithm) do
-    :crypto.mac(:hmac, :sha256, master_seed, algorithm)
+    hkdf_sha256(master_seed, @hkdf_salt, algorithm, 32)
+  end
+
+  @spec hkdf_sha256(binary(), binary(), binary(), pos_integer()) :: binary()
+  defp hkdf_sha256(ikm, salt, info, length) do
+    prk = :crypto.mac(:hmac, :sha256, salt, ikm)
+    hkdf_expand(prk, info, length)
+  end
+
+  defp hkdf_expand(prk, info, length) do
+    blocks = ceil(length / 32)
+
+    {okm, _} =
+      Enum.reduce(1..blocks, {<<>>, <<>>}, fn counter, {acc, prev} ->
+        block = :crypto.mac(:hmac, :sha256, prk, prev <> info <> <<counter>>)
+        {acc <> block, block}
+      end)
+
+    binary_part(okm, 0, length)
   end
 
   @doc """
@@ -215,7 +235,11 @@ defmodule Bastille.Shared.Crypto do
   Store public keys from a keypair for future verification.
   """
   @spec store_public_keys_from_keypair(pq_keypair()) :: :ok | {:error, term()}
-  def store_public_keys_from_keypair(%{dilithium: %{public: dil_pub}, falcon: %{public: fal_pub}, sphincs: %{public: sph_pub}}) do
+  def store_public_keys_from_keypair(%{
+        dilithium: %{public: dil_pub},
+        falcon: %{public: fal_pub},
+        sphincs: %{public: sph_pub}
+      }) do
     # Derive address from public keys
     address = derive_bastille_address_from_public_keys(dil_pub, fal_pub, sph_pub)
 
@@ -235,7 +259,8 @@ defmodule Bastille.Shared.Crypto do
   @doc """
   Retrieve public keys for an address.
   """
-  @spec get_public_keys_for_address(String.t()) :: {:ok, Bastille.Infrastructure.Storage.CubDB.State.public_keys_map()} | {:error, term()}
+  @spec get_public_keys_for_address(String.t()) ::
+          {:ok, Bastille.Infrastructure.Storage.CubDB.State.public_keys_map()} | {:error, term()}
   def get_public_keys_for_address(address) do
     State.get_public_keys(address)
   end
@@ -253,7 +278,8 @@ defmodule Bastille.Shared.Crypto do
   """
   @spec get_threshold() :: {pos_integer(), pos_integer()}
   def get_threshold do
-    {2, 3}  # 2 out of 3 signatures required
+    # 2 out of 3 signatures required
+    {2, 3}
   end
 
   # === Address Generation ===
@@ -263,7 +289,28 @@ defmodule Bastille.Shared.Crypto do
   This is the ONLY method that should be used for address generation.
   """
   @spec generate_bastille_address(pq_keypair()) :: String.t()
-  def generate_bastille_address(%{dilithium: %{public: dil_pub}, falcon: %{public: fal_pub}, sphincs: %{public: sph_pub}}) do
+  def generate_bastille_address(%{
+        dilithium: %{public: dil_pub},
+        falcon: %{public: fal_pub},
+        sphincs: %{public: sph_pub}
+      }) do
+    derive_bastille_address_from_public_keys(dil_pub, fal_pub, sph_pub)
+  end
+
+  @doc """
+  Derive the Bastille address that a bare public-keys map hashes to.
+
+  The address is `prefix <> first20(sha256(dilithium <> falcon <> sphincs))`,
+  so an address binds its three public keys. Verifiers use this to reject a
+  transaction whose embedded public keys do not hash to its `from` address.
+  """
+  @spec address_from_public_keys(%{
+          dilithium: binary(),
+          falcon: binary(),
+          sphincs: binary()
+        }) :: String.t()
+  def address_from_public_keys(%{dilithium: dil_pub, falcon: fal_pub, sphincs: sph_pub})
+      when is_binary(dil_pub) and is_binary(fal_pub) and is_binary(sph_pub) do
     derive_bastille_address_from_public_keys(dil_pub, fal_pub, sph_pub)
   end
 
@@ -309,15 +356,19 @@ defmodule Bastille.Shared.Crypto do
         false
     end
   end
+
   def valid_address?(_), do: false
 
   # === Key Size Constants ===
 
   @doc """
-  Returns the size in bytes of a Dilithium2 private key.
+  Returns the size in bytes of a Dilithium2 (ML-DSA-44) private key.
+
+  The private key is the 32-byte ML-DSA seed (its canonical FIPS form), from
+  which the expanded key is regenerated on demand.
   """
   @spec dilithium_private_key_size() :: non_neg_integer()
-  def dilithium_private_key_size, do: 2560
+  def dilithium_private_key_size, do: 32
 
   @doc """
   Returns the size in bytes of a Falcon512 private key.
@@ -359,13 +410,13 @@ defmodule Bastille.Shared.Crypto do
   Returns the size in bytes of a Falcon512 signature.
   """
   @spec falcon_signature_size() :: non_neg_integer()
-  def falcon_signature_size, do: 690
+  def falcon_signature_size, do: 666
 
   @doc """
-  Returns the size in bytes of a SPHINCS+ signature.
+  Returns the size in bytes of a SPHINCS+-SHAKE-128f-simple signature.
   """
   @spec sphincs_signature_size() :: non_neg_integer()
-  def sphincs_signature_size, do: 7856
+  def sphincs_signature_size, do: 17_088
 
   # === Legacy Functions (Removed) ===
   # The following functions are removed as part of security fixes:

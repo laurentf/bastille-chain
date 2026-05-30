@@ -14,7 +14,11 @@ defmodule Bastille.Features.P2P.Messaging.Validation do
   Returns :ok or {:error, :network_mismatch}.
   """
   @spec validate_network(map(), network(), String.t()) :: :ok | {:error, :network_mismatch}
-  def validate_network(%{"network" => peer_network, "magic" => peer_magic}, local_network, local_magic)
+  def validate_network(
+        %{"network" => peer_network, "magic" => peer_magic},
+        local_network,
+        local_magic
+      )
       when is_atom(local_network) and is_binary(local_magic) do
     valid_network? = peer_network in ["mainnet", "testnet"]
     valid_magic? = is_binary(peer_magic) and byte_size(peer_magic) in 8..64
@@ -66,6 +70,7 @@ defmodule Bastille.Features.P2P.Messaging.Validation do
       {:error, :too_many_transactions}
     end
   end
+
   defp validate_block_transaction_count(_), do: :ok
 
   @doc """
@@ -82,7 +87,12 @@ defmodule Bastille.Features.P2P.Messaging.Validation do
     else
       bytes_a = :binary.bin_to_list(bin_a)
       bytes_b = :binary.bin_to_list(bin_b)
-      diff = Enum.reduce(Enum.zip(bytes_a, bytes_b), 0, fn {x, y}, acc -> Bitwise.bor(acc, Bitwise.bxor(x, y)) end)
+
+      diff =
+        Enum.reduce(Enum.zip(bytes_a, bytes_b), 0, fn {x, y}, acc ->
+          Bitwise.bor(acc, Bitwise.bxor(x, y))
+        end)
+
       diff == 0
     end
   end

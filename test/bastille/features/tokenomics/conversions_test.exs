@@ -12,4 +12,3 @@ defmodule Bastille.Features.Tokenomics.ConversionsFeatureTest do
     assert Conversions.bast_to_juillet(1.0) == one_bast
   end
 end
-

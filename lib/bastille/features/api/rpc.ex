@@ -16,8 +16,8 @@ defmodule Bastille.Features.Api.RPC do
     SubmitTransaction
   }
 
-  plug :match
-  plug :dispatch
+  plug(:match)
+  plug(:dispatch)
 
   # POST /
   post "/" do
@@ -29,30 +29,41 @@ defmodule Bastille.Features.Api.RPC do
         case method do
           "generate_address" ->
             GenerateAddress.call(params)
+
           "extract_keys_for_signing" ->
             ExtractKeysForSigning.call(params)
+
           "create_unsigned_transaction" ->
             CreateUnsignedTransaction.call(params)
+
           "sign_transaction" ->
             SignTransaction.call(params)
+
           "submit_transaction" ->
             SubmitTransaction.call(params)
+
           "get_balance" ->
             GetBalance.call(params)
+
           "get_transaction" ->
             GetTransaction.call(params)
+
           "get_info" ->
             GetInfo.call(params)
+
           _ ->
             %{error: "Unknown method"}
         end
+
       resp = %{jsonrpc: "2.0", id: req["id"], result: result}
+
       conn
       |> put_resp_content_type("application/json")
       |> send_resp(200, Jason.encode!(resp))
     else
       _ ->
         resp = %{jsonrpc: "2.0", error: "Invalid request"}
+
         conn
         |> put_resp_content_type("application/json")
         |> send_resp(400, Jason.encode!(resp))
@@ -72,7 +83,8 @@ defmodule Bastille.Features.Api.RPC do
     Plug.Cowboy.child_spec(
       scheme: :http,
       plug: __MODULE__,
-      options: [ip: {127, 0, 0, 1}, port: rpc_port] # Configurable Bastille RPC port
+      # Configurable Bastille RPC port
+      options: [ip: {127, 0, 0, 1}, port: rpc_port]
     )
   end
 end

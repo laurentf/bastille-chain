@@ -164,6 +164,7 @@ defmodule Bastille.Features.Shared.AddressFeatureTest do
 
       # Mutating any single char case breaks the checksum (when applicable).
       mutated = String.replace(checksummed, "a", "A", global: false)
+
       if mutated != checksummed do
         refute Address.valid?(mutated)
       end

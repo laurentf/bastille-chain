@@ -12,20 +12,20 @@ defmodule Bastille.Features.Block.Block do
   alias Bastille.Features.Transaction.Transaction
 
   @type t :: %__MODULE__{
-    header: header(),
-    transactions: [Transaction.t()],
-    hash: binary() | nil
-  }
+          header: header(),
+          transactions: [Transaction.t()],
+          hash: binary() | nil
+        }
 
   @type header :: %{
-    index: non_neg_integer(),
-    previous_hash: binary(),
-    timestamp: integer(),
-    merkle_root: binary(),
-    nonce: non_neg_integer(),
-    difficulty: non_neg_integer(),
-    consensus_data: map()
-  }
+          index: non_neg_integer(),
+          previous_hash: binary(),
+          timestamp: integer(),
+          merkle_root: binary(),
+          nonce: non_neg_integer(),
+          difficulty: non_neg_integer(),
+          consensus_data: map()
+        }
 
   @derive Jason.Encoder
   defstruct [
@@ -110,17 +110,19 @@ defmodule Bastille.Features.Block.Block do
     # label for coinbase semantics (special-cased in Chain). The recipient is
     # the env-aware zero address so it conforms to the configured prefix+hex
     # format and validates uniformly in testnet and mainnet.
-    genesis_transaction = Transaction.new([
-      from: "1789Genesis",
-      to: Address.zero(),
-      amount: 178_900_000_000_000_000, # 1789 BAST initial supply (1 block reward worth)
-      fee: 0,
-      nonce: 0,
-      timestamp: bastille_day_2025,
-      data: "Liberté, Égalité, Fraternité",
-      signature_type: :coinbase,
-      signature: %{type: :coinbase}
-    ])
+    genesis_transaction =
+      Transaction.new(
+        from: "1789Genesis",
+        to: Address.zero(),
+        # 1789 BAST initial supply (1 block reward worth)
+        amount: 178_900_000_000_000_000,
+        fee: 0,
+        nonce: 0,
+        timestamp: bastille_day_2025,
+        data: "Liberté, Égalité, Fraternité",
+        signature_type: :coinbase,
+        signature: %{type: :coinbase}
+      )
 
     # Merkle root of a single-transaction block is the transaction hash itself
     # (binary). Transaction.calculate_hash/1 returns the whole struct with the
@@ -135,8 +137,10 @@ defmodule Bastille.Features.Block.Block do
         previous_hash: <<0::256>>,
         timestamp: bastille_day_2025,
         merkle_root: genesis_merkle_root,
-        nonce: 1789, # Symbolic nonce for French Revolution year
-        difficulty: 0, # No difficulty for genesis
+        # Symbolic nonce for French Revolution year
+        nonce: 1789,
+        # No difficulty for genesis
+        difficulty: 0,
         consensus_data: %{
           genesis: true,
           network: "bastille",
@@ -144,7 +148,8 @@ defmodule Bastille.Features.Block.Block do
         }
       },
       transactions: [genesis_transaction],
-      hash: nil # Will be calculated as hardcoded hash
+      # Will be calculated as hardcoded hash
+      hash: nil
     }
 
     # Calculate and set the hardcoded genesis hash
@@ -212,7 +217,9 @@ defmodule Bastille.Features.Block.Block do
   @spec calculate_merkle_root(list(Transaction.t())) :: binary()
   def calculate_merkle_root(transactions) when is_list(transactions) do
     case transactions do
-      [] -> <<0::256>>
+      [] ->
+        <<0::256>>
+
       txs ->
         txs
         |> Enum.map(&Transaction.hash/1)
@@ -280,17 +287,19 @@ defmodule Bastille.Features.Block.Block do
     transaction_data = :erlang.term_to_binary(transactions)
 
     # Ensure all header fields are binaries
-    previous_hash = case header.previous_hash do
-      bin when is_binary(bin) -> bin
-      nil -> <<0::256>>
-      _ -> <<0::256>>
-    end
+    previous_hash =
+      case header.previous_hash do
+        bin when is_binary(bin) -> bin
+        nil -> <<0::256>>
+        _ -> <<0::256>>
+      end
 
-    merkle_root = case header.merkle_root do
-      bin when is_binary(bin) -> bin
-      nil -> <<0::256>>
-      _ -> <<0::256>>
-    end
+    merkle_root =
+      case header.merkle_root do
+        bin when is_binary(bin) -> bin
+        nil -> <<0::256>>
+        _ -> <<0::256>>
+      end
 
     # Create header data
     header_data = <<
@@ -307,9 +316,10 @@ defmodule Bastille.Features.Block.Block do
   # Private functions
 
   defp valid_header?(%{index: i, timestamp: t, difficulty: d})
-    when is_integer(i) and i >= 0 and is_integer(t) and is_integer(d) and d > 0 do
+       when is_integer(i) and i >= 0 and is_integer(t) and is_integer(d) and d > 0 do
     true
   end
+
   defp valid_header?(_), do: false
 
   defp valid_transactions?(transactions) do
@@ -325,7 +335,8 @@ defmodule Bastille.Features.Block.Block do
     # ABSOLUTE SECURITY: Every block MUST have a valid Blake3 hash
     # No exceptions, even for tests
     if is_nil(block.hash) do
-      false  # ← Immediate rejection of blocks without hash
+      # ← Immediate rejection of blocks without hash
+      false
     else
       # ALWAYS Triple Blake3 - no bypass possible
       expected_blake3 = calculate_blake3_hash(%{block | hash: nil})
@@ -334,6 +345,7 @@ defmodule Bastille.Features.Block.Block do
   end
 
   defp build_merkle_tree([hash]), do: hash
+
   defp build_merkle_tree(hashes) do
     hashes
     |> Enum.chunk_every(2)

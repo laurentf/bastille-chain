@@ -206,33 +206,43 @@ defmodule Bastille do
   @doc """
   Generate keypair from mnemonic phrase.
   """
-  @spec keypair_from_mnemonic(String.t()) :: map()
+  @spec keypair_from_mnemonic(String.t()) :: map() | {:error, term()}
   def keypair_from_mnemonic(mnemonic) do
-    {:ok, keys} = Seed.derive_keys_from_seed(mnemonic)
+    case Seed.derive_keys_from_mnemonic(mnemonic) do
+      {:ok, keys} ->
+        keypair = %{
+          dilithium: keys.dilithium,
+          falcon: keys.falcon,
+          sphincs: keys.sphincs
+        }
 
-    keypair = %{
-      dilithium: keys.dilithium,
-      falcon: keys.falcon,
-      sphincs: keys.sphincs
-    }
+        # Store public keys for transaction verification
+        address = Crypto.generate_bastille_address(keypair)
 
-    # Store public keys for transaction verification
-    address = Crypto.generate_bastille_address(keypair)
-    public_keys = %{
-      dilithium: keys.dilithium.public,
-      falcon: keys.falcon.public,
-      sphincs: keys.sphincs.public
-    }
-    Storage.State.store_public_keys(address, public_keys)
+        public_keys = %{
+          dilithium: keys.dilithium.public,
+          falcon: keys.falcon.public,
+          sphincs: keys.sphincs.public
+        }
 
-    keypair
+        Storage.State.store_public_keys(address, public_keys)
+
+        keypair
+
+      {:error, _reason} = error ->
+        error
+    end
   end
 
   @doc """
   Generate a new mnemonic phrase with address.
   Returns both mnemonic and derived address.
   """
-  @spec generate_address_with_mnemonic() :: %{address: String.t(), mnemonic: String.t(), mnemonic_list: [String.t()]}
+  @spec generate_address_with_mnemonic() :: %{
+          address: String.t(),
+          mnemonic: String.t(),
+          mnemonic_list: [String.t()]
+        }
   def generate_address_with_mnemonic do
     mnemonic = Seed.generate_master_seed()
     pq_keys = keypair_from_mnemonic(mnemonic)
@@ -253,7 +263,7 @@ defmodule Bastille do
   @spec derive_keys_from_seed(String.t()) :: {:ok, map()} | {:error, term()}
   def derive_keys_from_seed(seed) when is_binary(seed) do
     try do
-      {:ok, keys} = Seed.derive_keys_from_seed(seed)
+      {:ok, keys} = Seed.derive_keys_from_mnemonic(seed)
 
       keypair = %{
         dilithium: keys.dilithium,
@@ -261,7 +271,7 @@ defmodule Bastille do
         sphincs: keys.sphincs
       }
 
-              address = Crypto.generate_bastille_address(keypair)
+      address = Crypto.generate_bastille_address(keypair)
 
       result = %{
         address: address,
@@ -308,8 +318,14 @@ defmodule Bastille do
   @doc """
   Create a transaction from mnemonic phrase.
   """
-  @spec create_transaction_from_mnemonic(String.t(), String.t(), String.t(), non_neg_integer(), keyword()) ::
-    {:ok, Transaction.t()} | {:error, term()}
+  @spec create_transaction_from_mnemonic(
+          String.t(),
+          String.t(),
+          String.t(),
+          non_neg_integer(),
+          keyword()
+        ) ::
+          {:ok, Transaction.t()} | {:error, term()}
   def create_transaction_from_mnemonic(mnemonic, from_address, to_address, amount, opts \\ []) do
     case keypair_from_mnemonic(mnemonic) do
       pq_keys when is_map(pq_keys) ->
@@ -322,7 +338,8 @@ defmodule Bastille do
           {:error, :invalid_mnemonic_or_address_mismatch}
         end
 
-      error -> error
+      error ->
+        error
     end
   end
 
@@ -331,45 +348,48 @@ defmodule Bastille do
   Amount can be in BAST (float) or juillet (integer).
   """
   @spec create_transaction(
-    String.t(),
-    String.t(),
-    Token.amount_bast() | Token.amount_juillet(),
-    Crypto.pq_keypair(),
-    keyword()
-  ) :: {:ok, Transaction.t()} | {:error, term()}
+          String.t(),
+          String.t(),
+          Token.amount_bast() | Token.amount_juillet(),
+          Crypto.pq_keypair(),
+          keyword()
+        ) :: {:ok, Transaction.t()} | {:error, term()}
   def create_transaction(from_address, to_address, amount, pq_keys, opts \\ []) do
     # Convert amount to juillet if needed
-    amount_juillet = if is_float(amount) do
-      Token.bast_to_juillet(amount)
-    else
-      amount
-    end
+    amount_juillet =
+      if is_float(amount) do
+        Token.bast_to_juillet(amount)
+      else
+        amount
+      end
 
     # Calculate fee if not provided (auto-calculate based on data size)
     data = Keyword.get(opts, :data, <<>>)
-    fee_juillet = case Keyword.get(opts, :fee) do
-      nil -> Token.calculate_fee(byte_size(data), :normal)
-      fee when is_float(fee) -> Token.bast_to_juillet(fee)
-      fee -> fee
-    end
+
+    fee_juillet =
+      case Keyword.get(opts, :fee) do
+        nil -> Token.calculate_fee(byte_size(data), :normal)
+        fee when is_float(fee) -> Token.bast_to_juillet(fee)
+        fee -> fee
+      end
 
     # Validate addresses
     with :ok <- validate_bastille_address(from_address),
          :ok <- validate_bastille_address(to_address) do
-
       # Get current nonce for the address
-    current_nonce = Chain.get_nonce(from_address)
+      current_nonce = Chain.get_nonce(from_address)
 
       # Create transaction
-      tx = Transaction.new([
-        from: from_address,
-        to: to_address,
-        amount: amount_juillet,
-        fee: fee_juillet,
-        nonce: current_nonce + 1,
-        data: data,
-        signature_type: :post_quantum_2_of_3
-      ])
+      tx =
+        Transaction.new(
+          from: from_address,
+          to: to_address,
+          amount: amount_juillet,
+          fee: fee_juillet,
+          nonce: current_nonce + 1,
+          data: data,
+          signature_type: :post_quantum_2_of_3
+        )
 
       # Store public keys for verification
       Crypto.store_public_keys_from_keypair(pq_keys)
@@ -383,7 +403,6 @@ defmodule Bastille do
     end
   end
 
-
   @doc """
   Submits a transaction to the mempool.
   """
@@ -395,15 +414,22 @@ defmodule Bastille do
         P2PNode.broadcast_transaction(tx)
         :ok
 
-      error -> error
+      error ->
+        error
     end
   end
 
   @doc """
   Creates and submits a post-quantum transaction in one step.
   """
-  @spec send_transaction(String.t(), String.t(), non_neg_integer(), Crypto.pq_keypair(), keyword()) ::
-    :ok | {:error, term()}
+  @spec send_transaction(
+          String.t(),
+          String.t(),
+          non_neg_integer(),
+          Crypto.pq_keypair(),
+          keyword()
+        ) ::
+          :ok | {:error, term()}
   def send_transaction(from_address, to_address, amount, pq_keys, opts \\ []) do
     with {:ok, tx} <- create_transaction(from_address, to_address, amount, pq_keys, opts),
          :ok <- submit_transaction(tx) do
@@ -617,7 +643,6 @@ defmodule Bastille do
     end
   end
 
-
   @doc """
   Validates a transaction with post-quantum or legacy signatures.
   """
@@ -648,6 +673,7 @@ defmodule Bastille do
   @spec get_examples() :: map()
   def get_examples do
     pq_keys = generate_keypair()
+
     %{
       post_quantum: %{
         address: pq_keys.address,
@@ -671,10 +697,11 @@ defmodule Bastille do
     start_time = System.monotonic_time(:microsecond)
 
     # Generate many addresses
-    addresses = for _ <- 1..count do
-      keys = generate_keypair()
-      keys.address
-    end
+    addresses =
+      for _ <- 1..count do
+        keys = generate_keypair()
+        keys.address
+      end
 
     end_time = System.monotonic_time(:microsecond)
     duration_ms = (end_time - start_time) / 1000
@@ -715,6 +742,7 @@ defmodule Bastille do
         {:error, :invalid_format}
     end
   end
+
   def decode_address(_), do: {:error, :invalid_format}
 
   # Private functions

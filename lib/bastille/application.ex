@@ -43,24 +43,36 @@ defmodule Bastille.Application do
     # Extract mempool configuration (skip flags only meaningful in tests)
     mempool_opts = Application.get_env(:bastille, :mempool_opts, [])
 
-    children = [
-      RPC,                           # JSON-RPC interface for Bastille
-      # 🏰 Revolutionary Supervision Tree (Feature-Oriented Architecture)
-      # 🗄️ Modern 4-Database Storage Architecture (CubDB-based)
-      {Blocks, []},                  # Time-partitioned block storage (blocks202501.cubdb)
-      {ChainStorage, []},            # Chain structure/metadata (chain.cubdb)
-      {State, []},                   # Account balances/nonces (state.cubdb)
-      {Index, []},                   # Fast lookups/indexes (index.cubdb)
-
-      {Chain, []},                   # Revolutionary blockchain state
-      {Mempool, mempool_opts},       # Post-quantum transaction pool
-      {OrphanManager, []},           # Orphan block manager (Bitcoin-style)
-      {Engine, consensus_config},    # Democratic consensus with proper config
-      {MiningCoordinator, validator_config}, # Blake3 mining & validation with config
-      {Node, p2p_node_config},       # P2P network node coordinator
-      {Sync, []}                     # Blockchain synchronization coordinator
-    ]
-    |> Enum.filter(&valid_child?/1)
+    children =
+      [
+        # JSON-RPC interface for Bastille
+        RPC,
+        # 🏰 Revolutionary Supervision Tree (Feature-Oriented Architecture)
+        # 🗄️ Modern 4-Database Storage Architecture (CubDB-based)
+        # Time-partitioned block storage (blocks202501.cubdb)
+        {Blocks, []},
+        # Chain structure/metadata (chain.cubdb)
+        {ChainStorage, []},
+        # Account balances/nonces (state.cubdb)
+        {State, []},
+        # Fast lookups/indexes (index.cubdb)
+        {Index, []},
+        # Revolutionary blockchain state
+        {Chain, []},
+        # Post-quantum transaction pool
+        {Mempool, mempool_opts},
+        # Orphan block manager (Bitcoin-style)
+        {OrphanManager, []},
+        # Democratic consensus with proper config
+        {Engine, consensus_config},
+        # Blake3 mining & validation with config
+        {MiningCoordinator, validator_config},
+        # P2P network node coordinator
+        {Node, p2p_node_config},
+        # Blockchain synchronization coordinator
+        {Sync, []}
+      ]
+      |> Enum.filter(&valid_child?/1)
 
     # Default restart intensity is `max_restarts: 3, max_seconds: 5` which is
     # too brittle for a top-level blockchain supervisor: a routine cycle of a

@@ -1,5 +1,6 @@
 defmodule Bastille.Shared.Mnemonic do
   import Bitwise
+
   @moduledoc """
   🇫🇷 Bastille Mnemonic - French BIP39-style word conversion
   Converts private keys to memorable French words and vice versa.
@@ -9,7 +10,9 @@ defmodule Bastille.Shared.Mnemonic do
   @french_wordlist Path.join(:code.priv_dir(:bastille), "bip39_french.txt")
                    |> File.read!()
                    |> String.split("\n", trim: true)
-                   |> Enum.map(fn w -> w |> String.trim() |> :unicode.characters_to_nfc_binary() end)
+                   |> Enum.map(fn w ->
+                     w |> String.trim() |> :unicode.characters_to_nfc_binary()
+                   end)
 
   defp normalize_word(word) do
     word
@@ -22,7 +25,7 @@ defmodule Bastille.Shared.Mnemonic do
     checksum = :crypto.hash(:sha256, entropy) |> binary_to_byte()
 
     entropy_bits = for <<b::1 <- entropy>>, do: b
-    checksum_bits = for i <- 0..7, do: (checksum >>> (7-i)) &&& 1
+    checksum_bits = for i <- 0..7, do: checksum >>> (7 - i) &&& 1
 
     (entropy_bits ++ checksum_bits)
     |> Enum.chunk_every(11)
@@ -61,26 +64,35 @@ defmodule Bastille.Shared.Mnemonic do
   end
 
   defp indices_to_entropy(indices) do
-    bits =
+    {entropy_bits, checksum_bits} =
       indices
       |> Enum.flat_map(&index_to_bits/1)
       |> Enum.split(256)
-      |> elem(0)  # Take first 256 bits (entropy)
 
     entropy =
-      bits
+      entropy_bits
       |> Enum.chunk_every(8)
       |> Enum.map(&bits_to_byte/1)
       |> :binary.list_to_bin()
 
-    {:ok, entropy}
+    if checksum_bits == expected_checksum_bits(entropy) do
+      {:ok, entropy}
+    else
+      {:error, "Invalid checksum"}
+    end
+  end
+
+  # BIP39 checksum: the first 8 bits of SHA256(entropy).
+  defp expected_checksum_bits(entropy) do
+    checksum = :crypto.hash(:sha256, entropy) |> binary_to_byte()
+    for i <- 0..7, do: checksum >>> (7 - i) &&& 1
   end
 
   # Helpers with guards and pattern matching
   defp binary_to_byte(<<byte, _rest::binary>>), do: byte
 
   defp bits_to_word_index(bits) do
-    Enum.reduce(bits, 0, fn bit, acc -> (acc <<< 1) ||| bit end)
+    Enum.reduce(bits, 0, fn bit, acc -> acc <<< 1 ||| bit end)
   end
 
   defp find_word_index(word) do
@@ -88,20 +100,20 @@ defmodule Bastille.Shared.Mnemonic do
   end
 
   defp index_to_bits(index) do
-    for i <- 10..0//-1, do: (index >>> i) &&& 1
+    for i <- 10..0//-1, do: index >>> i &&& 1
   end
 
   defp bits_to_byte(bits) do
-    Enum.reduce(bits, 0, fn bit, acc -> (acc <<< 1) ||| bit end)
+    Enum.reduce(bits, 0, fn bit, acc -> acc <<< 1 ||| bit end)
   end
 
+  @doc """
+  True for a complete, valid 24-word BIP39 mnemonic: right word count, every
+  word in the French wordlist, and a matching checksum.
+  """
   def valid_mnemonic?(mnemonic_string) when is_binary(mnemonic_string) do
-    words = String.split(mnemonic_string, " ")
-    words = Enum.map(words, fn w -> w |> String.trim() |> :unicode.characters_to_nfc_binary() end)
-    length(words) >= 12 and Enum.all?(words, fn word -> Enum.member?(@french_wordlist, word) end)
+    match?({:ok, _}, from_mnemonic(mnemonic_string))
   end
-
-
 
   def wordlist, do: @french_wordlist
 end

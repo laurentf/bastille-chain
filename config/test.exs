@@ -9,12 +9,14 @@ config :bastille,
   address_prefix: "f789",
 
   # RPC API Configuration for tests
-  rpc_port: 8332,  # Standard test RPC port
+  # Standard test RPC port
+  rpc_port: 8332,
 
   # Test-specific storage paths (isolated from prod)
   storage: [
     base_path: "data/test",
-    node_prefix: nil  # No prefix for single-node tests
+    # No prefix for single-node tests
+    node_prefix: nil
   ],
 
   # Mining disabled by default (can be enabled for testing)
@@ -40,7 +42,8 @@ config :bastille,
 
   # Mempool configuration
   mempool: [
-    max_size: 100,   # Smaller for tests
+    # Smaller for tests
+    max_size: 100,
     min_fee: 1
   ],
 
@@ -61,11 +64,12 @@ config :bastille,
     discovery_enabled: false
   ]
 
-  # Note: Using modern 4-database architecture - no single bastille.cubdb needed
+# Note: Using modern 4-database architecture - no single bastille.cubdb needed
 
 # Logger configuration for tests
 config :logger,
-  level: String.to_atom(System.get_env("BASTILLE_LOG_LEVEL") || "info"),  # Configurable log level
+  # Configurable log level
+  level: String.to_atom(System.get_env("BASTILLE_LOG_LEVEL") || "info"),
   compile_time_purge_matching: [
     [level_lower_than: String.to_atom(System.get_env("BASTILLE_LOG_LEVEL") || "info")]
   ]

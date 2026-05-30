@@ -15,17 +15,25 @@ and **Blake3 Proof-of-Work** mining.
 
 - **Multi-node local network** (`MIX_ENV=node1|node2|node3`) : 3 nodes, 2
   peers each, blocks propagate, RPC stays responsive while mining.
-- **310 unit tests** stable across consecutive runs (~1.5s).
+- **348 unit tests** stable across consecutive runs (~1.5s).
 - **4-database CubDB storage** (blocks time-partitioned by month, chain
   metadata, account state, fast lookups) with batch atomicity inside each
   DB.
 - **PoW Blake3 mining** with dynamic difficulty adjustment. Hot loop and
   consensus state read via `:persistent_term` snapshot, so mining doesn't
   block the Engine GenServer or RPC reads.
-- **2/3 post-quantum signatures** (Dilithium2 + Falcon512 + SPHINCS+) via
-  Rust NIFs. Signed message binds `from`, `to`, `amount`, `fee`, `nonce`,
-  `timestamp`, `data` length + bytes, and the network chain id — no
-  silent fee/payload tampering, no cross-network replay.
+- **2/3 post-quantum signatures** — ML-DSA-44 (Dilithium2) + FN-DSA-512
+  (Falcon512) + SLH-DSA-SHAKE-128f (SPHINCS+) via Rust NIFs. Signed message
+  binds `from`, `to`, `amount`, `fee`, `nonce`, `timestamp`, `data` length +
+  bytes, and the network chain id — no silent fee/payload tampering, no
+  cross-network replay.
+- **Deterministic BIP39 mnemonic recovery.** 24-word French mnemonic →
+  `PBKDF2-HMAC-SHA512` master seed → per-algorithm `HKDF-SHA256` sub-seeds →
+  keypairs, purely (no disk cache). The same phrase restores the same address on
+  any machine or a fresh data directory; a single mistyped word is caught by the
+  BIP39 checksum. Dilithium/SPHINCS+ use the FIPS `keygen_internal` seed APIs,
+  Falcon a ChaCha20-seeded generator; the whole chain is frozen by known-answer
+  vectors (`priv/test/kat_keys.json`). See `docs/key_derivation_design.md`.
 - **EIP-55-inspired address checksum** (SHA-256 based). Canonical form is
   lowercase; the RPC also returns a mixed-case `address_display` for
   wallets, and rejects mistyped mixed-case input via the embedded
@@ -42,26 +50,38 @@ and **Blake3 Proof-of-Work** mining.
 - **Mempool validation** runs in the caller's process via a pure
   `Chain.TransactionValidator` — no `GenServer.call(Chain, …)` queueing
   behind a long `add_block`.
+- **P2P transaction propagation.** A transaction submitted to one node is
+  relayed (`inv` → `getdata` → `tx`) to its peers, added to their mempools and
+  re-broadcast, so any miner can include it. Incoming txs are rebuilt through a
+  validating `TransactionConverter` and de-duplicated via `transactions_seen`.
+- **Chain reorganization.** A heavier competing fork is detected (cumulative
+  work), its common ancestor found over P2P, and then *adopted*: the chain rolls
+  back to the ancestor (per-block state journal) and the fork is applied block by
+  block. The switch is all-or-nothing — a fork block that fails validation aborts
+  the reorg and restores the original chain untouched. Orphaned coinbases revert
+  via the journal; orphaned non-coinbase txs are re-injected into the mempool.
 
 ## What does NOT work yet
 
-- **Mnemonic-based key derivation is not actually deterministic.** The
-  Rust NIF generates fresh random keys and caches them on disk under a
-  hash of the seed. Recovery from mnemonic on a different machine yields
-  different keys. → Bloquant for any testnet with shared addresses.
-- **No chain reorganization.** No cumulative work tracking, no rollback.
-  Two miners producing in parallel can diverge silently (tolerable on a
-  controlled topology, a blocker for an open multi-miner testnet).
-- **Transactions do not propagate over P2P.** Only blocks do. Mempool is
-  per-node ; multi-miner setups are de facto broken until this lands.
+- **Chain reorganization is single-fork.** The switch works and its edge cases
+  are tested (invalid-midway abort, depth limit, cascaded double-reorg, reorg
+  racing a freshly-mined block — Sprint 4.5). But only one competing fork is
+  chased at a time, the fork point must be within the last 100 blocks (the
+  reorg/journal window), and true cross-node convergence is only checked
+  manually on the 3-node topology — there's no automated multinode test
+  (singleton GenServers preclude an in-VM 2-node network). Fine on a controlled
+  topology; not yet proven on an open multi-miner testnet.
 - **P2P is plaintext TCP.** No encryption, no peer authentication.
   Tolerable behind a whitelisted bootstrap topology, not OK for an open
   testnet.
-- **No coinbase maturity.** Was implemented earlier as a Bitcoin copy,
-  but the orphan-protection it provides has no teeth without chain
-  reorganization (which Bastille doesn't have). Removed for simplicity
-  — to be re-added or skipped Ethereum-PoW style once reorg lands.
-  Balances are spendable as soon as they are credited.
+- **No coinbase maturity — by decision (Sprint 4.6), Ethereum-PoW style.** Block
+  rewards are spendable as soon as credited. A reorg that orphans a coinbase also
+  drops any spend of it — orphaned txs are re-validated on re-injection and fail on
+  insufficient balance — so the post-reorg state stays consistent (no cascade; the
+  thing Bitcoin's 100-block maturity guards against is a UTXO-model concern). Reorg
+  depth is bounded by `MAX_REORG_DEPTH` (100). The only residual risk is a recipient
+  acting on a shallowly-confirmed credit, mitigated by confirmation depth as on any
+  chain. Full rationale in `IMPROVEMENT_PLAN.md` §4.6.
 - **Mining serialization and P2P header payloads still use
   `:erlang.term_to_binary`** — fine for an Elixir-only network, a
   blocker for any other-language client that needs to validate the
@@ -154,6 +174,25 @@ done
 ```
 
 All three should report the same height and `connected_peers >= 1`.
+
+### Submit a tx and watch it propagate
+
+With the 3 nodes running, build and submit a signed transaction to **node1**
+(RPC 8101) via the wallet flow (`generate_address` →
+`create_unsigned_transaction` → `sign_transaction` → `submit_transaction`).
+
+On `submit_transaction`, node1 advertises the tx to its peers (`inv`). Watch the
+node2 and node3 logs for the relay handshake completing:
+
+```
+📦 Received tx from 127.0.0.1:8001
+✅ Tx 1a2b3c4d... added to mempool
+```
+
+The transaction is now in every node's mempool, so any miner (node1 or node3)
+can include it in the next block. A node that already holds the tx logs
+`🔄 Tx ... already seen, not relaying` and stops — flooding stays loop-free via
+`transactions_seen`.
 
 ---
 
@@ -351,8 +390,7 @@ data/<env>/
 ├── blocks202606.cubdb
 ├── chain.cubdb           # height ↔ hash mapping + metadata
 ├── state.cubdb           # balances, nonces, pubkeys per address
-├── index.cubdb           # tx hash → location, addr → tx list
-└── key_cache/            # ⚠️ Rust NIF random-key cache (cf. caveats)
+└── index.cubdb           # tx hash → location, addr → tx list
 ```
 
 Supervision tree is `Bastille.Application` (`one_for_one`,
@@ -365,7 +403,8 @@ GenServers, `Chain`, `Mempool`, `OrphanManager`, `Consensus.Engine`,
 ## 🧪 Testing & quality
 
 ```bash
-MIX_ENV=test mix test               # 300+ tests
+MIX_ENV=test mix test               # 350+ tests (add --include integration for the full set)
+mix format --check-formatted        # formatting (.formatter.exs / .editorconfig)
 MIX_ENV=test mix credo --strict     # static analysis
 mix dialyzer                         # type checking
 mix docs                             # generate ex_doc
@@ -384,8 +423,12 @@ Multi-node sync, mining, RPC reactive while mining, tests green.
 - ✅ JSON wire format on RPC, no `:erlang.binary_to_term/1` on input (Sprint 1.3)
 - ✅ Confirmed-tx lookup in `get_transaction` (Sprint 1.4)
 - ✅ Mempool decoupled from Chain GenServer (Sprint 1.5)
-- ⬜ Real deterministic PQ key derivation from mnemonic (replace the random-cache NIF).
-- ⬜ P2P transaction relay (so multi-miner mempool actually works).
+- ✅ Deterministic PQ key derivation from mnemonic — ml-dsa / slh-dsa / fn-dsa, no cache (Sprint 3.2).
+- ✅ P2P transaction relay (so multi-miner mempool actually works).
+- ✅ Chain reorganization — cumulative work, state-rollback journal,
+  common-ancestor search, transactional rollback + reapply, edge-case tests, and
+  the coinbase-maturity decision (Sprint 4.1–4.6). Automated cross-node
+  convergence test still open.
 
 ### v0.3 — "public testnet" — planned
 - Canonical wire format (drop `erlang.term_to_binary` everywhere).
@@ -395,9 +438,9 @@ Multi-node sync, mining, RPC reactive while mining, tests green.
 - WebSocket subscription RPC.
 
 ### v1.0 — "mainnet candidate"
-- Chain reorganization (cumulative work + state rollback) — at which
-  point we'll revisit whether coinbase maturity makes sense for an
-  account-based model (Ethereum-PoW didn't have it).
+- Multinode reorg hardening (automated cross-node convergence test). The
+  single-fork reorg core landed in v0.2 (Sprint 4.1–4.6); coinbase maturity was
+  decided against for the account model (§4.6).
 - State root / Merkle Patricia Trie (for SPV, light clients, sharding).
 - Authenticated P2P (Noise XX or mTLS).
 - Multi-thread mining.
@@ -419,7 +462,7 @@ See [`docker/README.md`](./docker/README.md).
 
 1. Fork.
 2. Branch: `git checkout -b feature/whatever`.
-3. Follow `.cursorrules` — pattern matching in heads, `with` over nested
+3. Follow `CONVENTIONS.md` — pattern matching in heads, `with` over nested
    `case`, English-only comments, no aspirational claims in code.
 4. Tests must stay green: `MIX_ENV=test mix test`.
 5. PR.

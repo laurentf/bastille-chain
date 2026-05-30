@@ -64,7 +64,9 @@ defmodule Bastille.Features.Api.RPC.GetTransaction do
       current_height = Chain.get_height()
       confirmations = max(0, current_height - block.header.index + 1)
 
-      Logger.debug("🔍 Tx #{short(hex_hash)} confirmed at height #{block.header.index} (#{confirmations} confirmations)")
+      Logger.debug(
+        "🔍 Tx #{short(hex_hash)} confirmed at height #{block.header.index} (#{confirmations} confirmations)"
+      )
 
       %{
         status: "confirmed",
@@ -78,7 +80,10 @@ defmodule Bastille.Features.Api.RPC.GetTransaction do
       # Index points to a block/tx that storage can no longer materialize.
       # Should be rare (only on partition rotation bugs or partial restore).
       _ ->
-        Logger.warning("⚠️ Tx #{short(hex_hash)} indexed but block/tx missing (partition #{partition})")
+        Logger.warning(
+          "⚠️ Tx #{short(hex_hash)} indexed but block/tx missing (partition #{partition})"
+        )
+
         %{status: "not_found", hash: hex_hash, note: "index entry could not be resolved"}
     end
   end

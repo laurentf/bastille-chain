@@ -22,11 +22,18 @@ defmodule Bastille.Infrastructure.Storage.CubDB.Chain do
   defstruct [:chain_db, :db_path]
 
   # Key namespaces (RocksDB column family simulation)
-  @height_to_hash_prefix "h2h:"     # "h2h:00001234" → block_hash
-  @hash_to_height_prefix "hash2h:"  # "hash2h:ABCD..." → height
-  @metadata_prefix "meta:"          # "meta:height", "meta:head_hash"
-  @difficulty_prefix "diff:"        # "diff:00001234" → difficulty
-  @parent_child_prefix "pc:"        # "pc:parent_hash" → [child_hashes]
+  # "h2h:00001234" → block_hash
+  @height_to_hash_prefix "h2h:"
+  # "hash2h:ABCD..." → height
+  @hash_to_height_prefix "hash2h:"
+  # "meta:height", "meta:head_hash"
+  @metadata_prefix "meta:"
+  # "diff:00001234" → difficulty
+  @difficulty_prefix "diff:"
+  # "pc:parent_hash" → [child_hashes]
+  @parent_child_prefix "pc:"
+  # "work:ABCD..." → cumulative work (integer)
+  @work_prefix "work:"
 
   @doc """
   Start the chain metadata storage.
@@ -42,6 +49,16 @@ defmodule Bastille.Infrastructure.Storage.CubDB.Chain do
   @spec store_block_link(non_neg_integer(), binary()) :: :ok | {:error, term()}
   def store_block_link(height, block_hash) do
     GenServer.call(__MODULE__, {:store_block_link, height, block_hash})
+  end
+
+  @doc """
+  Remove a height → hash link (and its reverse hash → height). Used during a
+  chain reorganization to clear links left above the new head when the winning
+  fork is shorter than the chain it replaced.
+  """
+  @spec delete_block_link(non_neg_integer(), binary()) :: :ok | {:error, term()}
+  def delete_block_link(height, block_hash) do
+    GenServer.call(__MODULE__, {:delete_block_link, height, block_hash})
   end
 
   @doc """
@@ -101,6 +118,22 @@ defmodule Bastille.Infrastructure.Storage.CubDB.Chain do
   end
 
   @doc """
+  Store the cumulative work of a block (sum of per-block work up to it).
+  """
+  @spec store_cumulative_work(binary(), non_neg_integer()) :: :ok | {:error, term()}
+  def store_cumulative_work(block_hash, work) when is_integer(work) and work >= 0 do
+    GenServer.call(__MODULE__, {:store_cumulative_work, block_hash, work})
+  end
+
+  @doc """
+  Get the cumulative work of a block hash.
+  """
+  @spec get_cumulative_work(binary()) :: {:ok, non_neg_integer()} | {:error, :not_found}
+  def get_cumulative_work(block_hash) do
+    GenServer.call(__MODULE__, {:get_cumulative_work, block_hash})
+  end
+
+  @doc """
   Get chain statistics.
   """
   @spec get_stats() :: map()
@@ -112,7 +145,9 @@ defmodule Bastille.Infrastructure.Storage.CubDB.Chain do
 
   @impl true
   def init(opts) do
-    db_path = Keyword.get(opts, :db_path, Bastille.Infrastructure.Storage.CubDB.Paths.chain_path())
+    db_path =
+      Keyword.get(opts, :db_path, Bastille.Infrastructure.Storage.CubDB.Paths.chain_path())
+
     File.mkdir_p!(Path.dirname(db_path))
 
     {:ok, chain_db} = CubDB.start_link(data_dir: db_path)
@@ -141,6 +176,13 @@ defmodule Bastille.Infrastructure.Storage.CubDB.Chain do
       :ok -> {:reply, :ok, state}
       error -> {:reply, error, state}
     end
+  end
+
+  @impl true
+  def handle_call({:delete_block_link, height, block_hash}, _from, state) do
+    height_key = @height_to_hash_prefix <> height_to_key(height)
+    hash_key = @hash_to_height_prefix <> Base.encode16(block_hash)
+    {:reply, batch_write(state.chain_db, [{:delete, height_key}, {:delete, hash_key}]), state}
   end
 
   @impl true
@@ -219,6 +261,26 @@ defmodule Bastille.Infrastructure.Storage.CubDB.Chain do
     case CubDB.put(state.chain_db, key, updated_children) do
       :ok -> {:reply, :ok, state}
       error -> {:reply, error, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:store_cumulative_work, block_hash, work}, _from, state) do
+    key = @work_prefix <> Base.encode16(block_hash)
+
+    case CubDB.put(state.chain_db, key, work) do
+      :ok -> {:reply, :ok, state}
+      error -> {:reply, error, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:get_cumulative_work, block_hash}, _from, state) do
+    key = @work_prefix <> Base.encode16(block_hash)
+
+    case CubDB.get(state.chain_db, key) do
+      nil -> {:reply, {:error, :not_found}, state}
+      work -> {:reply, {:ok, work}, state}
     end
   end
 

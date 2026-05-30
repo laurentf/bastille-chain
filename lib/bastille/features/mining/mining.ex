@@ -22,24 +22,29 @@ defmodule Bastille.Features.Mining.Mining do
   to ensure hash consistency.
   """
   @spec serialize_block_for_mining(Block.t()) :: binary()
-  def serialize_block_for_mining(%Bastille.Features.Block.Block{header: header, transactions: transactions}) do
+  def serialize_block_for_mining(%Bastille.Features.Block.Block{
+        header: header,
+        transactions: transactions
+      }) do
     # Bitcoin-like serialization compatible with existing implementation
-    header_data = [
-      <<header.index::32>>,
-      header.previous_hash,
-      header.merkle_root,
-      <<header.timestamp::64>>,
-      <<header.difficulty::32>>
-    ] |> IO.iodata_to_binary()
+    header_data =
+      [
+        <<header.index::32>>,
+        header.previous_hash,
+        header.merkle_root,
+        <<header.timestamp::64>>,
+        <<header.difficulty::32>>
+      ]
+      |> IO.iodata_to_binary()
 
     # Simple transaction serialization
-    tx_data = transactions
-    |> Enum.map(&Transaction.to_binary/1)
-    |> IO.iodata_to_binary()
+    tx_data =
+      transactions
+      |> Enum.map(&Transaction.to_binary/1)
+      |> IO.iodata_to_binary()
 
     header_data <> tx_data
   end
-
 
   @doc """
   Performs a single Blake3 hash on data.
@@ -56,7 +61,8 @@ defmodule Bastille.Features.Mining.Mining do
       <<...32 bytes...>>
   """
   @spec blake3_hash(binary()) :: binary()
-  def blake3_hash(data) when is_binary(data), do: Bastille.Infrastructure.Crypto.CryptoNif.blake3_hash(data)
+  def blake3_hash(data) when is_binary(data),
+    do: Bastille.Infrastructure.Crypto.CryptoNif.blake3_hash(data)
 
   # Alias for backward compatibility
   @spec blake3_double_hash(binary()) :: binary()
@@ -123,6 +129,22 @@ defmodule Bastille.Features.Mining.Mining do
     end
   end
 
+  @two_pow_256 Integer.pow(2, 256)
+
+  @doc """
+  Work contributed by a block of the given difficulty: `2^256 / (target + 1)`,
+  using the canonical PoW target. This is the per-block term summed into a
+  chain's cumulative work, so chains can be compared by total work for reorg.
+  """
+  @spec work_for_difficulty(non_neg_integer()) :: non_neg_integer()
+  # Genesis (difficulty 0) is not mined, so it contributes no work.
+  def work_for_difficulty(0), do: 0
+
+  def work_for_difficulty(difficulty) when difficulty >= 1 do
+    target_int = difficulty |> difficulty_to_target() |> :binary.decode_unsigned()
+    div(@two_pow_256, target_int + 1)
+  end
+
   @doc """
   Converts difficulty to target value - TESTING mode.
 
@@ -149,10 +171,9 @@ defmodule Bastille.Features.Mining.Mining do
   @spec testing_target() :: binary()
   def testing_target do
     # Very high target = very easy mining
-    <<0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-      0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-      0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-      0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF>>
+    <<0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+      0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+      0xFF, 0xFF>>
   end
 
   @doc """
@@ -172,7 +193,8 @@ defmodule Bastille.Features.Mining.Mining do
   Returns :ok if consistent, {:error, reason} if not.
   """
   @spec validate_block_hash_consistency(Block.t()) :: :ok | {:error, atom()}
-  def validate_block_hash_consistency(%Bastille.Features.Block.Block{hash: nil}), do: {:error, :no_hash}
+  def validate_block_hash_consistency(%Bastille.Features.Block.Block{hash: nil}),
+    do: {:error, :no_hash}
 
   def validate_block_hash_consistency(%Bastille.Features.Block.Block{hash: stored_hash} = block) do
     calculated_hash = calculate_block_hash(block)

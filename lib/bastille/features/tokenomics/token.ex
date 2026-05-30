@@ -51,7 +51,7 @@ defmodule Bastille.Features.Tokenomics.Token do
   def juillet_to_bast(juillet_amount) when is_integer(juillet_amount) do
     Conversions.juillet_to_bast(juillet_amount)
   end
-  
+
   # Handle float amounts (convert to integer first)
   def juillet_to_bast(juillet_amount) when is_float(juillet_amount) do
     juillet_amount
@@ -139,8 +139,10 @@ defmodule Bastille.Features.Tokenomics.Token do
   """
   @spec calculate_fee(pos_integer(), atom()) :: amount_juillet()
   def calculate_fee(data_size_bytes, priority \\ :normal) do
-    base_fee = 1000  # 1000 juillet base fee
-    size_fee = data_size_bytes * 10  # 10 juillet per byte
+    # 1000 juillet base fee
+    base_fee = 1000
+    # 10 juillet per byte
+    size_fee = data_size_bytes * 10
 
     priority_multiplier = get_priority_multiplier(priority)
 
@@ -152,7 +154,8 @@ defmodule Bastille.Features.Tokenomics.Token do
   defp get_priority_multiplier(:normal), do: 1.0
   defp get_priority_multiplier(:high), do: 2.0
   defp get_priority_multiplier(:urgent), do: 5.0
-  defp get_priority_multiplier(_unknown), do: 1.0  # Default to normal
+  # Default to normal
+  defp get_priority_multiplier(_unknown), do: 1.0
 
   # Burn disabled for now
   @spec calculate_burn_amount(amount_juillet()) :: amount_juillet()
@@ -206,14 +209,16 @@ defmodule Bastille.Features.Tokenomics.Token do
   Get the base transaction fee in juillet.
   """
   @spec base_fee() :: amount_juillet()
-  def base_fee, do: 1000  # Updated base fee
+  # Updated base fee
+  def base_fee, do: 1000
 
   @doc """
   Calculate data fee based on data size.
   """
   @spec data_fee(binary()) :: amount_juillet()
   def data_fee(data) when is_binary(data) do
-    byte_size(data) * 10  # 10 juillet per byte
+    # 10 juillet per byte
+    byte_size(data) * 10
   end
 
   @doc """

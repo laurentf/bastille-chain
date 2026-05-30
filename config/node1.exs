@@ -19,7 +19,8 @@ config :bastille,
     enabled: true,
     listen_port: 8001,
     max_peers: 10,
-    bootstrap_peers: []  # This is the bootstrap node
+    # This is the bootstrap node
+    bootstrap_peers: []
   ],
 
   # Mining enabled on node1
@@ -32,8 +33,10 @@ config :bastille,
   consensus: [
     module: Bastille.Features.Mining.ProofOfWork,
     config: %{
-      initial_difficulty: 1,  # Easy for testing
-      target_block_time: 30_000,  # 30 seconds
+      # Easy for testing
+      initial_difficulty: 1,
+      # 30 seconds
+      target_block_time: 30_000,
       difficulty_adjustment_interval: 5,
       max_difficulty_change_factor: 2.0,
       minimum_difficulty: 1,

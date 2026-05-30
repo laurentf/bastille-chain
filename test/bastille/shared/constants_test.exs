@@ -53,7 +53,7 @@ defmodule Bastille.Shared.ConstantsTest do
   describe "tokenomics summary" do
     test "returns complete tokenomics information" do
       summary = Constants.tokenomics_summary()
-      
+
       assert summary.name == "Bastille Token"
       assert summary.symbol == "BAST"
       assert summary.decimals == 14
@@ -77,7 +77,7 @@ defmodule Bastille.Shared.ConstantsTest do
     end
 
     test "total supply at block height 100" do
-      expected = Constants.initial_supply_juillet() + (100 * Constants.block_reward_juillet())
+      expected = Constants.initial_supply_juillet() + 100 * Constants.block_reward_juillet()
       assert Constants.total_supply_at_block(100) == expected
     end
   end
@@ -92,7 +92,7 @@ defmodule Bastille.Shared.ConstantsTest do
 
     test "circulating supply with burns" do
       block_height = 50
-      burned = 1000000
+      burned = 1_000_000
       total = Constants.total_supply_at_block(block_height)
       circulating = Constants.circulating_supply_at_block(block_height, burned)
       assert circulating == total - burned
@@ -103,7 +103,7 @@ defmodule Bastille.Shared.ConstantsTest do
     test "annual inflation rate decreases as supply increases" do
       rate_block_1 = Constants.annual_inflation_rate(1)
       rate_block_1000 = Constants.annual_inflation_rate(1000)
-      
+
       assert rate_block_1 > rate_block_1000
     end
 
@@ -112,9 +112,10 @@ defmodule Bastille.Shared.ConstantsTest do
     end
 
     test "annual inflation rate is calculated correctly" do
-      block_height = 525_600  # One year of blocks (1 min avg)
+      # One year of blocks (1 min avg)
+      block_height = 525_600
       rate = Constants.annual_inflation_rate(block_height)
-      
+
       # Should be exactly 1.0 (100%) after one year
       assert_in_delta rate, 1.0, 0.001
     end

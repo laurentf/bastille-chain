@@ -28,16 +28,22 @@ defmodule Bastille.Infrastructure.Storage.CubDB.State do
   Contains Dilithium2, Falcon512, and SPHINCS+ public keys.
   """
   @type public_keys_map :: %{
-    dilithium: binary(),
-    falcon: binary(),
-    sphincs: binary()
-  }
+          dilithium: binary(),
+          falcon: binary(),
+          sphincs: binary()
+        }
 
   # Key namespaces (RocksDB column family simulation)
-  @balance_prefix "bal:"        # "bal:1789ABC..." → balance
-  @nonce_prefix "nonce:"        # "nonce:1789ABC..." → nonce
-  @pubkey_prefix "pubkey:"      # "pubkey:1789ABC..." → public_keys_map
-  @metadata_prefix "meta:"      # "meta:total_supply", "meta:total_burned"
+  # "bal:1789ABC..." → balance
+  @balance_prefix "bal:"
+  # "nonce:1789ABC..." → nonce
+  @nonce_prefix "nonce:"
+  # "pubkey:1789ABC..." → public_keys_map
+  @pubkey_prefix "pubkey:"
+  # "meta:total_supply", "meta:total_burned"
+  @metadata_prefix "meta:"
+  # "journal:ABCD..." → [{addr, old_balance, old_nonce}] for rollback
+  @journal_prefix "journal:"
 
   @doc """
   Start the state storage.
@@ -96,10 +102,40 @@ defmodule Bastille.Infrastructure.Storage.CubDB.State do
   end
 
   @doc """
+  Store the pre-application state of the addresses a block touches, so the block
+  can be rolled back during a chain reorganization.
+  `entries` is a list of `{address, old_balance, old_nonce}`.
+  """
+  @spec store_journal(binary(), [{String.t(), non_neg_integer(), non_neg_integer()}]) ::
+          :ok | {:error, term()}
+  def store_journal(block_hash, entries) when is_binary(block_hash) and is_list(entries) do
+    GenServer.call(__MODULE__, {:store_journal, block_hash, entries})
+  end
+
+  @doc """
+  Roll back a block: restore the balances/nonces captured in its journal and
+  delete the journal entry. Returns `{:error, :no_journal}` if none was stored.
+  """
+  @spec rollback_block(binary()) :: :ok | {:error, term()}
+  def rollback_block(block_hash) when is_binary(block_hash) do
+    GenServer.call(__MODULE__, {:rollback_block, block_hash})
+  end
+
+  @doc """
+  Delete a block's journal without rolling back (used to purge journals beyond
+  the reorg window).
+  """
+  @spec delete_journal(binary()) :: :ok | {:error, term()}
+  def delete_journal(block_hash) when is_binary(block_hash) do
+    GenServer.call(__MODULE__, {:delete_journal, block_hash})
+  end
+
+  @doc """
   Apply state changes atomically (batch operation).
   Used for transaction processing to ensure consistency.
   """
-  @type state_change :: {:balance, String.t(), Token.amount_juillet()} | {:nonce, String.t(), non_neg_integer()}
+  @type state_change ::
+          {:balance, String.t(), Token.amount_juillet()} | {:nonce, String.t(), non_neg_integer()}
   @spec apply_state_changes([state_change()]) :: :ok | {:error, term()}
   def apply_state_changes(changes) do
     GenServer.call(__MODULE__, {:apply_state_changes, changes})
@@ -107,7 +143,7 @@ defmodule Bastille.Infrastructure.Storage.CubDB.State do
 
   @doc """
   Get all account balances (for debugging/testing only).
-  
+
   ⚠️  WARNING: This queries ALL accounts from disk - testing/debugging only!
       Use get_balance/1 for individual account queries in production.
   """
@@ -144,7 +180,9 @@ defmodule Bastille.Infrastructure.Storage.CubDB.State do
 
   @impl true
   def init(opts) do
-    db_path = Keyword.get(opts, :db_path, Bastille.Infrastructure.Storage.CubDB.Paths.state_path())
+    db_path =
+      Keyword.get(opts, :db_path, Bastille.Infrastructure.Storage.CubDB.Paths.state_path())
+
     File.mkdir_p!(Path.dirname(db_path))
 
     {:ok, state_db} = CubDB.start_link(data_dir: db_path)
@@ -163,10 +201,12 @@ defmodule Bastille.Infrastructure.Storage.CubDB.State do
     key = @balance_prefix <> address
 
     case CubDB.get(state.state_db, key) do
-      nil -> {:reply, {:ok, 0}, state}  # Default balance is 0
+      # Default balance is 0
+      nil -> {:reply, {:ok, 0}, state}
       balance -> {:reply, {:ok, balance}, state}
     end
   end
+
   def handle_call({:get_balance, _invalid_address}, _from, state) do
     {:reply, {:error, :invalid_address}, state}
   end
@@ -186,10 +226,12 @@ defmodule Bastille.Infrastructure.Storage.CubDB.State do
     key = @nonce_prefix <> address
 
     case CubDB.get(state.state_db, key) do
-      nil -> {:reply, {:ok, 0}, state}  # Default nonce is 0
+      # Default nonce is 0
+      nil -> {:reply, {:ok, 0}, state}
       nonce -> {:reply, {:ok, nonce}, state}
     end
   end
+
   def handle_call({:get_nonce, _invalid_address}, _from, state) do
     {:reply, {:error, :invalid_address}, state}
   end
@@ -207,6 +249,7 @@ defmodule Bastille.Infrastructure.Storage.CubDB.State do
   @impl true
   def handle_call({:store_public_keys, address, public_keys}, _from, state) do
     key = @pubkey_prefix <> address
+
     case CubDB.put(state.state_db, key, public_keys) do
       :ok -> {:reply, :ok, state}
       error -> {:reply, error, state}
@@ -216,6 +259,7 @@ defmodule Bastille.Infrastructure.Storage.CubDB.State do
   @impl true
   def handle_call({:get_public_keys, address}, _from, state) do
     key = @pubkey_prefix <> address
+
     case CubDB.get(state.state_db, key) do
       nil -> {:reply, {:error, :not_found}, state}
       public_keys -> {:reply, {:ok, public_keys}, state}
@@ -223,14 +267,50 @@ defmodule Bastille.Infrastructure.Storage.CubDB.State do
   end
 
   @impl true
+  def handle_call({:store_journal, block_hash, entries}, _from, state) do
+    key = @journal_prefix <> Base.encode16(block_hash)
+
+    case CubDB.put(state.state_db, key, entries) do
+      :ok -> {:reply, :ok, state}
+      error -> {:reply, error, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:rollback_block, block_hash}, _from, state) do
+    key = @journal_prefix <> Base.encode16(block_hash)
+
+    case CubDB.get(state.state_db, key) do
+      nil ->
+        {:reply, {:error, :no_journal}, state}
+
+      entries ->
+        restore =
+          Enum.flat_map(entries, fn {address, balance, nonce} ->
+            [{:put, @balance_prefix <> address, balance}, {:put, @nonce_prefix <> address, nonce}]
+          end)
+
+        {:reply, batch_write(state.state_db, restore ++ [{:delete, key}]), state}
+    end
+  end
+
+  @impl true
+  def handle_call({:delete_journal, block_hash}, _from, state) do
+    key = @journal_prefix <> Base.encode16(block_hash)
+    {:reply, batch_write(state.state_db, [{:delete, key}]), state}
+  end
+
+  @impl true
   def handle_call({:apply_state_changes, changes}, _from, state) do
     # Atomic batch operation for state consistency
-    operations = Enum.map(changes, fn
-      {:balance, address, amount} ->
-        {:put, @balance_prefix <> address, amount}
-      {:nonce, address, nonce} ->
-        {:put, @nonce_prefix <> address, nonce}
-    end)
+    operations =
+      Enum.map(changes, fn
+        {:balance, address, amount} ->
+          {:put, @balance_prefix <> address, amount}
+
+        {:nonce, address, nonce} ->
+          {:put, @nonce_prefix <> address, nonce}
+      end)
 
     case batch_write(state.state_db, operations) do
       :ok -> {:reply, :ok, state}
@@ -240,15 +320,16 @@ defmodule Bastille.Infrastructure.Storage.CubDB.State do
 
   @impl true
   def handle_call(:get_all_balances, _from, state) do
-    balances = CubDB.select(state.state_db,
-      min_key: @balance_prefix,
-      max_key: @balance_prefix <> "\xFF"
-    )
-    |> Enum.map(fn {key, balance} ->
-      address = String.replace_prefix(key, @balance_prefix, "")
-      {address, balance}
-    end)
-    |> Enum.into(%{})
+    balances =
+      CubDB.select(state.state_db,
+        min_key: @balance_prefix,
+        max_key: @balance_prefix <> "\xFF"
+      )
+      |> Enum.map(fn {key, balance} ->
+        address = String.replace_prefix(key, @balance_prefix, "")
+        {address, balance}
+      end)
+      |> Enum.into(%{})
 
     {:reply, balances, state}
   end
@@ -256,11 +337,12 @@ defmodule Bastille.Infrastructure.Storage.CubDB.State do
   @impl true
   def handle_call(:get_total_supply, _from, state) do
     # Calculate total supply from all balances
-    total = CubDB.select(state.state_db,
-      min_key: @balance_prefix,
-      max_key: @balance_prefix <> "\xFF"
-    )
-    |> Enum.reduce(0, fn {_key, balance}, acc -> acc + balance end)
+    total =
+      CubDB.select(state.state_db,
+        min_key: @balance_prefix,
+        max_key: @balance_prefix <> "\xFF"
+      )
+      |> Enum.reduce(0, fn {_key, balance}, acc -> acc + balance end)
 
     {:reply, total, state}
   end

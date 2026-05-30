@@ -20,10 +20,14 @@ defmodule Bastille.Infrastructure.Storage.CubDB.Blocks do
   alias Bastille.Infrastructure.Storage.CubDB.Index
 
   defstruct [
-    :blocks_dbs,          # Map of "YYYYMM" -> CubDB PID
-    :current_blocks_db,   # Current month's block database PID
-    :current_partition,   # Current partition name (e.g., "202501")
-    :db_path              # Base path for databases
+    # Map of "YYYYMM" -> CubDB PID
+    :blocks_dbs,
+    # Current month's block database PID
+    :current_blocks_db,
+    # Current partition name (e.g., "202501")
+    :current_partition,
+    # Base path for databases
+    :db_path
   ]
 
   @doc """
@@ -90,7 +94,9 @@ defmodule Bastille.Infrastructure.Storage.CubDB.Blocks do
   @impl true
   def init(opts) do
     # Use configurable base path with node prefix support
-    db_path = Keyword.get(opts, :db_path, Bastille.Infrastructure.Storage.CubDB.Paths.blocks_path())
+    db_path =
+      Keyword.get(opts, :db_path, Bastille.Infrastructure.Storage.CubDB.Paths.blocks_path())
+
     File.mkdir_p!(db_path)
 
     # Initialize block partition management
@@ -125,8 +131,12 @@ defmodule Bastille.Infrastructure.Storage.CubDB.Blocks do
 
     case CubDB.put(state.current_blocks_db, {:block, block_hash}, block_data) do
       :ok ->
-        Logger.debug("📦 Block stored: #{Base.encode16(block_hash, case: :lower) |> String.slice(0, 16)}... in partition #{state.current_partition}")
+        Logger.debug(
+          "📦 Block stored: #{Base.encode16(block_hash, case: :lower) |> String.slice(0, 16)}... in partition #{state.current_partition}"
+        )
+
         {:reply, :ok, state}
+
       error ->
         {:reply, error, state}
     end
@@ -139,10 +149,14 @@ defmodule Bastille.Infrastructure.Storage.CubDB.Blocks do
       {:ok, partition} ->
         # Direct partition access - MUCH faster!
         case Map.get(state.blocks_dbs, partition) do
-          nil -> {:reply, {:error, :not_found}, state}
+          nil ->
+            {:reply, {:error, :not_found}, state}
+
           db ->
             case CubDB.get(db, {:block, block_hash}) do
-              nil -> {:reply, {:error, :not_found}, state}
+              nil ->
+                {:reply, {:error, :not_found}, state}
+
               block_data ->
                 block = :erlang.binary_to_term(block_data)
                 Logger.debug("📦 Block found via index: partition #{partition}")
@@ -161,8 +175,13 @@ defmodule Bastille.Infrastructure.Storage.CubDB.Blocks do
           {:ok, block} ->
             correct_partition = get_partition_from_timestamp(block.header.timestamp)
             Index.index_block(block_hash, correct_partition, block.header.timestamp)
-            Logger.debug("📦 Block indexed for future fast lookup in partition #{correct_partition}")
-          _ -> :ok
+
+            Logger.debug(
+              "📦 Block indexed for future fast lookup in partition #{correct_partition}"
+            )
+
+          _ ->
+            :ok
         end
 
         {:reply, result, state}
@@ -172,10 +191,14 @@ defmodule Bastille.Infrastructure.Storage.CubDB.Blocks do
   @impl true
   def handle_call({:get_block_from_partition, block_hash, partition}, _from, state) do
     case Map.get(state.blocks_dbs, partition) do
-      nil -> {:reply, {:error, :not_found}, state}
+      nil ->
+        {:reply, {:error, :not_found}, state}
+
       db ->
         case CubDB.get(db, {:block, block_hash}) do
-          nil -> {:reply, {:error, :not_found}, state}
+          nil ->
+            {:reply, {:error, :not_found}, state}
+
           block_data ->
             block = :erlang.binary_to_term(block_data)
             {:reply, {:ok, block}, state}
@@ -185,10 +208,12 @@ defmodule Bastille.Infrastructure.Storage.CubDB.Blocks do
 
   @impl true
   def handle_call(:get_stats, _from, state) do
-    partition_stats = Enum.map(state.blocks_dbs, fn {partition, db} ->
-      block_count = count_blocks_in_partition(db)
-      {partition, block_count}
-    end) |> Enum.into(%{})
+    partition_stats =
+      Enum.map(state.blocks_dbs, fn {partition, db} ->
+        block_count = count_blocks_in_partition(db)
+        {partition, block_count}
+      end)
+      |> Enum.into(%{})
 
     total_blocks = partition_stats |> Map.values() |> Enum.sum()
 
@@ -275,12 +300,16 @@ defmodule Bastille.Infrastructure.Storage.CubDB.Blocks do
         Logger.info("📅 Rotating to new block partition: #{current_partition}")
         {:ok, new_blocks_db} = get_or_create_blocks_db(state.db_path, current_partition)
         new_blocks_dbs = Map.put(state.blocks_dbs, current_partition, new_blocks_db)
-        %{state |
-          blocks_dbs: new_blocks_dbs,
-          current_blocks_db: new_blocks_db,
-          current_partition: current_partition
+
+        %{
+          state
+          | blocks_dbs: new_blocks_dbs,
+            current_blocks_db: new_blocks_db,
+            current_partition: current_partition
         }
-      false -> state
+
+      false ->
+        state
     end
   end
 
@@ -288,10 +317,14 @@ defmodule Bastille.Infrastructure.Storage.CubDB.Blocks do
 
   defp find_block_in_partitions([partition | rest], blocks_dbs, block_hash) do
     case Map.get(blocks_dbs, partition) do
-      nil -> find_block_in_partitions(rest, blocks_dbs, block_hash)
+      nil ->
+        find_block_in_partitions(rest, blocks_dbs, block_hash)
+
       db ->
         case CubDB.get(db, {:block, block_hash}) do
-          nil -> find_block_in_partitions(rest, blocks_dbs, block_hash)
+          nil ->
+            find_block_in_partitions(rest, blocks_dbs, block_hash)
+
           block_data ->
             block = :erlang.binary_to_term(block_data)
             {:ok, block}

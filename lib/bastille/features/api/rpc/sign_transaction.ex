@@ -23,12 +23,14 @@ defmodule Bastille.Features.Api.RPC.SignTransaction do
   alias Bastille.Shared.Crypto
   alias Bastille.Features.Transaction.Transaction
 
-  def call(%{
-        "dilithium_key" => _,
-        "falcon_key" => _,
-        "sphincs_key" => _,
-        "unsigned_transaction" => _
-      } = params) do
+  def call(
+        %{
+          "dilithium_key" => _,
+          "falcon_key" => _,
+          "sphincs_key" => _,
+          "unsigned_transaction" => _
+        } = params
+      ) do
     handle_secure_signing(params)
   end
 
@@ -54,10 +56,15 @@ defmodule Bastille.Features.Api.RPC.SignTransaction do
          {:ok, public_keys} <- Crypto.get_public_keys_for_address(unsigned_tx.from),
          keypair <- build_keypair(dil_key, fal_key, sph_key, public_keys),
          :ok <- verify_ownership(keypair, unsigned_tx.from) do
-      signed_tx = Transaction.sign(unsigned_tx, keypair)
+      # Embed the sender's public keys so any node can verify the signature
+      # without having seen this address before (they bind to `from`).
+      signed_tx = %{Transaction.sign(unsigned_tx, keypair) | public_keys: public_keys}
 
       Logger.info("✍️ Tx signed for #{unsigned_tx.from}")
-      Logger.info("   └─ hash: #{Base.encode16(signed_tx.hash, case: :lower) |> String.slice(0, 16)}...")
+
+      Logger.info(
+        "   └─ hash: #{Base.encode16(signed_tx.hash, case: :lower) |> String.slice(0, 16)}..."
+      )
 
       # Flat: the RPC dispatcher already wraps the return value under `result:`.
       %{
